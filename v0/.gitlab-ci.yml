@@ -1,0 +1,50 @@
+##########################
+## Gitlab-ci - PLI Etna ##
+##########################
+
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  CGO_ENABLED: "0"
+
+default:
+  tags:
+    - build
+
+unit-tests:
+  image: golang:1.25.0
+  stage: test
+  script:
+    - cd API
+    - go test ./...
+
+build-image:
+  image: docker
+  stage: build
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u $DOCKER_REGISTRY_USER --password-stdin
+    - docker build -t docker.io/etnauser/pli-api:latest API/.
+    - docker push docker.io/etnauser/pli-api:latest
+
+deploy-api:
+  image: alpine:latest
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH != "main"'
+      when: manual
+    - when: always
+  before_script:
+    - apk add --no-cache openssh-client
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+    - chmod 600 ~/.ssh/id_ed25519
+  script:
+    - ssh -oStrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST "cd app && docker compose down && sleep 10 && docker compose pull && docker compose up -d"
