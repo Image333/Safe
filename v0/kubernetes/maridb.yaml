@@ -1,0 +1,60 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: my-mariadb
+  namespace: pli
+spec:
+  rootPasswordSecretKeyRef:
+    name: pli-mariadb-secret
+    key: root-password
+  storage:
+    size: 5Gi
+  port: 3306
+  replicas: 3
+  replication:
+    enabled: true
+    primary:
+      autoFailover: true
+      autoFailoverDelay: 0s
+    replica:
+      replPasswordSecretKeyRef:
+        name: pli-mariadb-secret
+        key: replication-password
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Database
+metadata:
+  name: pli-db
+  namespace: pli
+spec:
+  mariaDbRef:
+    name: my-mariadb
+  name: pli-db
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: pli-user
+  namespace: pli
+spec:
+  mariaDbRef:
+    name: my-mariadb
+  passwordSecretKeyRef:
+    name: pli-mariadb-secret
+    key: user-password
+  host: "%"
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: pli-user-grant
+  namespace: pli
+spec:
+  mariaDbRef:
+    name: my-mariadb
+  privileges:
+    - ALL PRIVILEGES
+  database: pli-db
+  table: "*"
+  username: pli-user
+  host: "%"

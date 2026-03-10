@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pli-api
+  namespace: pli
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pli-api
+  template:
+    metadata:
+      labels:
+        app: pli-api
+    spec:
+      containers:
+        - name: api
+          image: docker.io/etnauser/pli-api:latest
+          ports:
+            - containerPort: 3002
+          env:
+            - name: MARIADB_USER
+              value: pli-user
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pli-mariadb-secret
+                  key: user-password
+            - name: MARIADB_DATABASE
+              value: pli-db
+            - name: MARIADB_ADDRESS
+              value: my-mariadb.pli.svc.cluster.local
+            - name: MARIADB_PORT
+              value: "3306"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pli-api
+  namespace: pli
+spec:
+  selector:
+    app: pli-api
+  ports:
+    - protocol: TCP
+      port: 3002
+      targetPort: 3002
+  type: ClusterIP
