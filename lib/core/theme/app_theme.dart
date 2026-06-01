@@ -12,7 +12,10 @@ class AppColors {
   static const green    = Color(0xFF16A34A);
   static const greenLight=Color(0xFFD1FAE5);
   static const white    = Color(0xFFFFFFFF);
-}
+  static const purpleL = Color(0xFFF3E8FF);
+  static const orange  = Color(0xFFD97706);
+  static const orangeL = Color(0xFFFEF3C7);
+  }
 
 class AppTheme {
   static ThemeData get theme => ThemeData(
