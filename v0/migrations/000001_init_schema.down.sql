@@ -1,0 +1,8 @@
+DROP TABLE IF EXISTS audio_records;
+DROP TABLE IF EXISTS geolocations;
+DROP TABLE IF EXISTS alerts;
+DROP TABLE IF EXISTS user_contacts;
+DROP TABLE IF EXISTS contacts;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS configurations;
+DROP TABLE IF EXISTS roles;
