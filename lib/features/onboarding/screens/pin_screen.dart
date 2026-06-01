@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
+import '../widgets/safe_calculator.dart';
 
 class PinScreen extends StatefulWidget {
   const PinScreen({super.key});
@@ -347,50 +348,18 @@ Widget build(BuildContext context) {
                 ]),
               ),
               const SizedBox(height: 16),
-              // Écran calculatrice
               Expanded(
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 24),
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  decoration: BoxDecoration(
-                    color: AppColors.navy,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (_operator != null)
-                        Text(
-                          '${_firstOperand?.toInt()} $_operator',
-                          style: TextStyle(fontSize: 18, color: AppColors.white.withOpacity(0.5)),
-                        ),
-                      Text(
-                        _display,
-                        style: const TextStyle(
-                          fontSize: 56, fontWeight: FontWeight.w300,
-                          color: AppColors.white, letterSpacing: -1,
-                        ),
-                      ),
-                      if (_error != null)
-                        Container(
-                          margin: const EdgeInsets.only(top: 8),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: AppColors.red.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(_error!, style: const TextStyle(color: AppColors.redLight, fontSize: 12), textAlign: TextAlign.right),
-                        ),
-                    ],
-                  ),
+                child: SafeCalculator(
+                  display: _display,
+                  firstOperand: _firstOperand,
+                  operatorSymbol: _operator,
+                  error: _error,
+                  onDigit: _onDigit,
+                  onOperator: _onOperator,
+                  onClear: _onClear,
+                  onDelete: _onDelete,
+                  onEqual: _onEqual,
                 ),
-              ),
-              const SizedBox(height: 16),
-              // Clavier
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: _buildKeypad(),
               ),
               const SizedBox(height: 24),
             ]),
@@ -400,57 +369,6 @@ Widget build(BuildContext context) {
     ),
   );
 }
-
-
-  Widget _buildKeypad() {
-    // Ligne 1 : AC, +/-, ÷, ×
-    // Ligne 2-4 : chiffres + opérateurs
-    // Ligne 5 : 0, ., =
-    return Column(children: [
-      _buildRow([
-        _CalcKey(label: 'AC', onTap: _onClear, type: KeyType.function),
-        _CalcKey(label: '⌫',  onTap: _onDelete, type: KeyType.function),
-        _CalcKey(label: '÷',  onTap: () => _onOperator('÷'), type: KeyType.operator),
-        _CalcKey(label: '×',  onTap: () => _onOperator('×'), type: KeyType.operator),
-      ]),
-      _buildRow([
-        _CalcKey(label: '7', onTap: () => _onDigit('7')),
-        _CalcKey(label: '8', onTap: () => _onDigit('8')),
-        _CalcKey(label: '9', onTap: () => _onDigit('9')),
-        _CalcKey(label: '−', onTap: () => _onOperator('−'), type: KeyType.operator),
-      ]),
-      _buildRow([
-        _CalcKey(label: '4', onTap: () => _onDigit('4')),
-        _CalcKey(label: '5', onTap: () => _onDigit('5')),
-        _CalcKey(label: '6', onTap: () => _onDigit('6')),
-        _CalcKey(label: '+', onTap: () => _onOperator('+'), type: KeyType.operator),
-      ]),
-      _buildRow([
-        _CalcKey(label: '1', onTap: () => _onDigit('1')),
-        _CalcKey(label: '2', onTap: () => _onDigit('2')),
-        _CalcKey(label: '3', onTap: () => _onDigit('3')),
-        _CalcKey(label: '=', onTap: _onEqual, type: KeyType.equal),
-      ]),
-      _buildRow([
-        _CalcKey(label: '0', onTap: () => _onDigit('0'), wide: true),
-        _CalcKey(label: '.', onTap: () {}),
-        _CalcKey(label: '=', onTap: _onEqual, type: KeyType.equal),
-      ], hasWide: true),
-    ]);
-  }
-
-  Widget _buildRow(List<_CalcKey> keys, { bool hasWide = false }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(children: keys.map((k) => Expanded(
-        flex: k.wide ? 2 : 1,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 5),
-          child: k,
-        ),
-      )).toList()),
-    );
-  }
 
   Widget _buildProgress(int active) {
     const total = 4;
@@ -464,61 +382,5 @@ Widget build(BuildContext context) {
         ),
       ),
     )));
-  }
-}
-
-// ── Touche calculatrice ───────────────────────────────────────────────────────
-enum KeyType { digit, operator, function, equal }
-
-class _CalcKey extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  final KeyType type;
-  final bool wide;
-
-  const _CalcKey({
-    required this.label,
-    required this.onTap,
-    this.type = KeyType.digit,
-    this.wide = false,
-  });
-
-  Color get _bg {
-    switch (type) {
-      case KeyType.operator:  return AppColors.blue;
-      case KeyType.function:  return AppColors.grayLight;
-      case KeyType.equal:     return AppColors.navy;
-      case KeyType.digit:     return AppColors.white;
-    }
-  }
-
-  Color get _fg {
-    switch (type) {
-      case KeyType.operator:  return AppColors.white;
-      case KeyType.function:  return AppColors.gray;
-      case KeyType.equal:     return AppColors.white;
-      case KeyType.digit:     return AppColors.navy;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 64,
-        decoration: BoxDecoration(
-          color: _bg,
-          borderRadius: BorderRadius.circular(14),
-          border: type == KeyType.digit
-              ? Border.all(color: const Color(0xFFE5E7EB))
-              : null,
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 4, offset: const Offset(0, 2))],
-        ),
-        child: Center(
-          child: Text(label, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500, color: _fg)),
-        ),
-      ),
-    );
   }
 }
