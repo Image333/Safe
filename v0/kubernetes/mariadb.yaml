@@ -2,10 +2,10 @@ apiVersion: k8s.mariadb.com/v1alpha1
 kind: MariaDB
 metadata:
   name: my-mariadb
-  namespace: pli
+  namespace: gpe
 spec:
   rootPasswordSecretKeyRef:
-    name: pli-mariadb-secret
+    name: gpe-mariadb-secret
     key: root-password
   storage:
     size: 5Gi
@@ -18,43 +18,43 @@ spec:
       autoFailoverDelay: 0s
     replica:
       replPasswordSecretKeyRef:
-        name: pli-mariadb-secret
+        name: gpe-mariadb-secret
         key: replication-password
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Database
 metadata:
-  name: pli-db
-  namespace: pli
+  name: gpe-db
+  namespace: gpe
 spec:
   mariaDbRef:
     name: my-mariadb
-  name: pli-db
+  name: gpe-db
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: User
 metadata:
-  name: pli-user
-  namespace: pli
+  name: gpe-user
+  namespace: gpe
 spec:
   mariaDbRef:
     name: my-mariadb
   passwordSecretKeyRef:
-    name: pli-mariadb-secret
+    name: gpe-mariadb-secret
     key: user-password
   host: "%"
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
 metadata:
-  name: pli-user-grant
-  namespace: pli
+  name: gpe-user-grant
+  namespace: gpe
 spec:
   mariaDbRef:
     name: my-mariadb
   privileges:
     - ALL PRIVILEGES
-  database: pli-db
+  database: gpe-db
   table: "*"
-  username: pli-user
+  username: gpe-user
   host: "%"
