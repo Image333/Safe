@@ -63,7 +63,9 @@ func main() {
 
 	// Ensure api to not crash in case of panic
 	app.Use(recover.New())
+
 	routes.HealthRoutes(app)
+	routes.RegisterUserRoutes(app, db)
 
 	log.Println("Server starting on :8080...")
 	if err := app.Listen(":8080"); err != nil {
