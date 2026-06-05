@@ -3,11 +3,16 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"gpe/routes"
+	_ "gpe/routes"
 	"log"
 	"os"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/mysql"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -48,6 +53,22 @@ func main() {
 		log.Fatalf("Migration failed : %v", err)
 	}
 	log.Println("Database updated")
+
+	app := fiber.New(fiber.Config{
+		AppName: "Safe API v1.0",
+	})
+
+	// Activate logger
+	app.Use(logger.New())
+
+	// Ensure api to not crash in case of panic
+	app.Use(recover.New())
+	routes.HealthRoutes(app)
+
+	log.Println("Server starting on :8080...")
+	if err := app.Listen(":8080"); err != nil {
+		log.Fatalf("Error when lauching server: %v", err)
+	}
 }
 
 // URead ENV var with fallback value
