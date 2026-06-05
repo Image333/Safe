@@ -40,6 +40,63 @@ type UserResponse struct {
 func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 
 	//
+	// Login
+	//
+	router.Post("/login", func(c *fiber.Ctx) error {
+		var req LoginRequest
+
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
+		}
+
+		if req.Email == "" || req.Password == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email et mot de passe requis"})
+		}
+
+		// 2. Récupérer l'utilisateur et son password haché depuis la BDD
+		query := `SELECT user_id, password FROM users WHERE email = ?`
+		var userID int
+		var storedHash string
+
+		err := db.QueryRow(query, req.Email).Scan(&userID, &storedHash)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Identifiants invalides"})
+			}
+			log.Printf("Erreur SQL Login: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Erreur serveur"})
+		}
+
+		err = bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(req.Password))
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Identifiants invalides"})
+		}
+
+		// 4. Créer les réclamations (Claims) du Token (ce qu'il contient)
+		claims := jwt.MapClaims{
+			"user_id": userID,
+			"email":   req.Email,
+			"exp":     time.Now().Add(time.Hour * 24).Unix(), // Le token expire dans 24h
+		}
+
+		// 5. Générer et signer le token
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, err := token.SignedString(jwtSecret)
+		if err != nil {
+			log.Printf("Erreur signature JWT: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de générer le token"})
+		}
+
+		// 6. Renvoyer le token au client
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"message": "Connexion réussie",
+			"token":   tokenString,
+		})
+	})
+
+	router.Use(ProtectedRoute())
+
+	//
 	// Create User
 	//
 	router.Post("/users", func(c *fiber.Ctx) error {
@@ -142,57 +199,5 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 
 		// 4. Renvoyer les infos de l'utilisateur trouvé
 		return c.Status(fiber.StatusOK).JSON(user)
-	})
-
-	router.Post("/login", func(c *fiber.Ctx) error {
-		var req LoginRequest
-
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
-		}
-
-		if req.Email == "" || req.Password == "" {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email et mot de passe requis"})
-		}
-
-		// 2. Récupérer l'utilisateur et son password haché depuis la BDD
-		query := `SELECT user_id, password FROM users WHERE email = ?`
-		var userID int
-		var storedHash string
-
-		err := db.QueryRow(query, req.Email).Scan(&userID, &storedHash)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Identifiants invalides"})
-			}
-			log.Printf("Erreur SQL Login: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Erreur serveur"})
-		}
-
-		err = bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(req.Password))
-		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Identifiants invalides"})
-		}
-
-		// 4. Créer les réclamations (Claims) du Token (ce qu'il contient)
-		claims := jwt.MapClaims{
-			"user_id": userID,
-			"email":   req.Email,
-			"exp":     time.Now().Add(time.Hour * 24).Unix(), // Le token expire dans 24h
-		}
-
-		// 5. Générer et signer le token
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenString, err := token.SignedString(jwtSecret)
-		if err != nil {
-			log.Printf("Erreur signature JWT: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de générer le token"})
-		}
-
-		// 6. Renvoyer le token au client
-		return c.Status(fiber.StatusOK).JSON(fiber.Map{
-			"message": "Connexion réussie",
-			"token":   tokenString,
-		})
 	})
 }
