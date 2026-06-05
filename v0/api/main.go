@@ -65,7 +65,10 @@ func main() {
 	app.Use(recover.New())
 
 	routes.HealthRoutes(app)
-	routes.RegisterUserRoutes(app, db)
+
+	api := app.Group("/api/v1")
+
+	routes.RegisterUserRoutes(api, db)
 
 	log.Println("Server starting on :8080...")
 	if err := app.Listen(":8080"); err != nil {
