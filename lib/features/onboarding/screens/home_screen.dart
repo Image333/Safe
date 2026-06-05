@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/router/app_router.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -191,7 +192,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
         // Paramètres
         IconButton(
-          onPressed: () {},
+          onPressed: () => Navigator.pushNamed(context, AppRouter.settings),
           icon: const Icon(Icons.settings_outlined, color: AppColors.grayMid),
         ),
       ]),

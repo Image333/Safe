@@ -15,6 +15,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _offlineMode       = true;
   String _selectedTrigger = 'volume';
   String _camouflageApp   = 'meteo';
+  bool _isLoggedIn        = false;
+  String _userEmail       = '';
 
   @override
   Widget build(BuildContext context) {
@@ -335,6 +337,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // TODO : effacer flutter_secure_storage + shared_preferences
             },
             child: const Text('Effacer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Dialog déconnexion ────────────────────────────────────────────────────
+  void _showLogoutConfirm(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Se déconnecter ?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.navy)),
+        content: const Text('Votre configuration restera sur votre téléphone.', style: TextStyle(color: AppColors.grayMid)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annuler', style: TextStyle(color: AppColors.grayMid)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              setState(() { _isLoggedIn = false; _userEmail = ''; });
+              Navigator.pop(context);
+            },
+            child: const Text('Se déconnecter'),
           ),
         ],
       ),
