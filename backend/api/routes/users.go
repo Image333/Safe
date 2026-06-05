@@ -36,7 +36,6 @@ type UserResponse struct {
 	ConfigID         *int   `json:"config_id"`
 }
 
-// RegisterUserRoutes prend le routeur ET la BDD en paramètre
 func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 
 	//
@@ -53,7 +52,6 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Email et mot de passe requis"})
 		}
 
-		// 2. Récupérer l'utilisateur et son password haché depuis la BDD
 		query := `SELECT user_id, password FROM users WHERE email = ?`
 		var userID int
 		var storedHash string
@@ -79,7 +77,7 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 			"exp":     time.Now().Add(time.Hour * 24).Unix(), // Le token expire dans 24h
 		}
 
-		// 5. Générer et signer le token
+		// Générer et signer le token
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 		tokenString, err := token.SignedString(jwtSecret)
 		if err != nil {
@@ -87,7 +85,7 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de générer le token"})
 		}
 
-		// 6. Renvoyer le token au client
+		// Renvoyer le token au client
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
 			"message": "Connexion réussie",
 			"token":   tokenString,
