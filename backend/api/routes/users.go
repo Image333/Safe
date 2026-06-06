@@ -92,8 +92,6 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 		})
 	})
 
-	router.Use(ProtectedRoute())
-
 	//
 	// Create User
 	//
@@ -150,6 +148,8 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 		})
 
 	})
+
+	router.Use(ProtectedRoute())
 
 	//
 	// Get user by email
