@@ -1,3 +1,10 @@
+Welcome to api documentation section
+
+key points :
+ - [Create Users](#create-user)
+ - [Get Users](#get-user-by-email)
+ - [User Login](#authentication---user-login)
+
 # Create User
 
 ## Endpoint
