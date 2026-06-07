@@ -121,7 +121,7 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 		if err != nil {
 			log.Printf("Erreur hachage: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Erreur interne du serveur",
+				"error": "Internal server error",
 			})
 		}
 
@@ -184,7 +184,7 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 		}
 
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
-			"message": "Utilisateur supprimé avec succès",
+			"message": "User deleted successfully",
 		})
 	})
 
