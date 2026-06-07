@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudbeaver-config
+  namespace: gpe
+data:
+  data-sources.json: |
+    {
+      "folders": {},
+      "connections": {
+        "mariadb-gpe": {
+          "provider": "mysql",
+          "driver": "mariadb",
+          "name": "MariaDB (gpe-db)",
+          "savePassword": true,
+          "readOnly": false,
+          "configuration": {
+            "host": "my-mariadb",
+            "port": "3306",
+            "database": "gpe-db",
+            "url": "jdbc:mariadb://my-mariadb:3306/gpe-db",
+            "configurationType": "MANUAL",
+            "authModel": "native",
+            "authProperties": {
+              "user": "gpe-user",
+              "password": "azerty1234"
+            }
+          }
+        }
+      },
+      "connectionProperties": {}
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cloudbeaver-data-pvc
+  namespace: gpe
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudbeaver
+  namespace: gpe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudbeaver
+  template:
+    metadata:
+      labels:
+        app: cloudbeaver
+    spec:
+      containers:
+      - name: cloudbeaver
+        image: dbeaver/cloudbeaver:latest
+        ports:
+        - containerPort: 8978
+        volumeMounts:
+        - name: cloudbeaver-data
+          mountPath: /opt/cloudbeaver/workspace
+        # Montage dans le dossier de configuration initiale de l'application
+        - name: config-volume
+          mountPath: /opt/cloudbeaver/conf/initial-data-sources.json
+          subPath: data-sources.json
+      volumes:
+      - name: cloudbeaver-data
+        persistentVolumeClaim:
+          claimName: cloudbeaver-data-pvc
+      - name: config-volume
+        configMap:
+          name: cloudbeaver-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudbeaver-service
+  namespace: gpe
+spec:
+  type: NodePort
+  ports:
+  - port: 8978
+    targetPort: 8978
+    nodePort: 30978
+  selector:
+    app: cloudbeaver
