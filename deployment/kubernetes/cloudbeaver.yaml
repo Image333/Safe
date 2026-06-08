@@ -6,30 +6,68 @@ metadata:
 data:
   data-sources.json: |
     {
-      "folders": {},
-      "connections": {
-        "mariadb-gpe": {
-          "provider": "mysql",
-          "driver": "mariadb",
-          "name": "MariaDB (gpe-db)",
-          "savePassword": true,
-          "readOnly": false,
-          "configuration": {
-            "host": "my-mariadb",
-            "port": "3306",
-            "database": "gpe-db",
-            "url": "jdbc:mariadb://my-mariadb:3306/gpe-db",
-            "configurationType": "MANUAL",
-            "authModel": "native",
-            "authProperties": {
-              "user": "gpe-user",
-              "password": "azerty1234"
-            }
-          }
-        }
-      },
-      "connectionProperties": {}
+    	"folders": {},
+    	"connections": {
+    		"mariaDB-19ea782a30c-4efc63e794376398": {
+    			"provider": "mysql",
+    			"driver": "mariaDB",
+    			"name": "MariaDB@my-mariadb",
+    			"configuration": {
+    				"host": "my-mariadb",
+    				"port": "3306",
+    				"database": "gpe-db",
+    				"url": "jdbc:mariadb://my-mariadb:3306/gpe-db",
+    				"configurationType": "MANUAL",
+    				"type": "dev",
+    				"closeIdleConnection": true,
+    				"provider-properties": {
+    					"@dbeaver-show-all-dbs@": "false"
+    				},
+    				"auth-model": "native",
+    				"bootstrap": {
+    					"autocommit": true
+    				}
+    			}
+    		}
+    	},
+    	"connection-types": {
+    		"dev": {
+    			"name": "Development",
+    			"color": "255,255,255",
+    			"description": "Regular development database",
+    			"auto-commit": true,
+    			"confirm-execute": false,
+    			"confirm-data-change": false,
+    			"smart-commit": false,
+    			"smart-commit-recover": true,
+    			"auto-close-transactions": true,
+    			"close-transactions-period": 1800,
+    			"auto-close-connections": true,
+    			"close-connections-period": 14400
+    		}
+    	}
     }
+  # initial-data.conf: |
+  #   {
+  #       adminName: "cbadmin",
+  #       adminPassword: "cbadmin_password",
+  #       teams: [
+  #           {
+  #               subjectId: "admin",
+  #               teamName: "Admin",
+  #               description: "Administrative access. Has total and full authority.",
+  #               permissions: ["admin"]
+  #           },
+  #           {
+  #               subjectId: "user",
+  #               teamName: "User",
+  #               description: "Standard user",
+  #               permissions: []
+  #           }
+  #       ]
+  #   }
+
+
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -68,8 +106,11 @@ spec:
           mountPath: /opt/cloudbeaver/workspace
         # Montage dans le dossier de configuration initiale de l'application
         - name: config-volume
-          mountPath: /opt/cloudbeaver/conf/initial-data-sources.json
+          mountPath: /opt/cloudbeaver/workspace/GlobalConfiguration/.dbeaver/data-sources.json
           subPath: data-sources.json
+        # - name: config-volume
+        #   mountPath: /opt/cloudbeaver/workspace/conf/initial-data.conf
+        #   subPath: initial-data.conf
       volumes:
       - name: cloudbeaver-data
         persistentVolumeClaim:
