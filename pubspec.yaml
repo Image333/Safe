@@ -29,6 +29,7 @@ dependencies:
 
   # Icônes
   flutter_svg: ^2.0.10+1
+  flutter_contacts: ^2.2.1
 
 dev_dependencies:
   flutter_test:
