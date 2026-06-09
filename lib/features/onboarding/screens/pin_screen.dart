@@ -28,6 +28,7 @@ class _PinScreenState extends State<PinScreen> {
   String? _secretNumber;
   String _input = '';
   String _display = '0';
+  String _expression = '';
   String? _error;
 
   double? _firstOperand;
@@ -79,6 +80,7 @@ class _PinScreenState extends State<PinScreen> {
   void _onDigit(String d) {
     setState(() {
       _error = null;
+      if (_confirming) _updateExpressionOnDigit(d);
       if (_waitingForSecond) {
         _input = d;
         _display = d;
@@ -97,6 +99,7 @@ class _PinScreenState extends State<PinScreen> {
 
   void _onOperator(String op) {
     setState(() {
+      if (_confirming) _expression = '$_display $op';
       _firstOperand = double.tryParse(_display);
       _operator = op;
       _waitingForSecond = true;
@@ -107,6 +110,7 @@ class _PinScreenState extends State<PinScreen> {
     setState(() {
       _input = '';
       _display = '0';
+      _expression = '';
       _firstOperand = null;
       _operator = null;
       _waitingForSecond = false;
@@ -117,11 +121,30 @@ class _PinScreenState extends State<PinScreen> {
   void _onDelete() {
     setState(() {
       _error = null;
+      if (_confirming && _expression.isNotEmpty) {
+        _expression = _expression.substring(0, _expression.length - 1);
+      }
       if (_input.isNotEmpty) {
         _input = _input.substring(0, _input.length - 1);
         _display = _input.isEmpty ? '0' : _input;
       }
     });
+  }
+
+  void _updateExpressionOnDigit(String d) {
+    if (_expression.contains('=')) {
+      _expression = d;
+      return;
+    }
+    if (_waitingForSecond) {
+      _expression = '$_expression $d';
+      return;
+    }
+    if (_display == '0') {
+      _expression = d;
+      return;
+    }
+    _expression += d;
   }
 
   void _onEqual() {
@@ -157,6 +180,7 @@ class _PinScreenState extends State<PinScreen> {
     }
 
     setState(() {
+      if (_confirming) _expression = '$_expression = $resultStr';
       _display = resultStr;
       _input = resultStr;
       _firstOperand = null;
@@ -181,6 +205,7 @@ class _PinScreenState extends State<PinScreen> {
           _error = null;
           _display = '0';
           _input = '';
+          _expression = '';
           _firstOperand = null;
           _operator = null;
           _waitingForSecond = false;
@@ -199,6 +224,7 @@ class _PinScreenState extends State<PinScreen> {
             'Résultat différent. Tapez une opération égale à $_secretNumber.';
         _display = '0';
         _input = '';
+        _expression = '';
         _firstOperand = null;
         _operator = null;
         _waitingForSecond = false;
@@ -399,6 +425,7 @@ class _PinScreenState extends State<PinScreen> {
                       display: _display,
                       firstOperand: _firstOperand,
                       operatorSymbol: _operator,
+                      expression: _expression,
                       error: _error,
                       onDigit: _onDigit,
                       onOperator: _onOperator,

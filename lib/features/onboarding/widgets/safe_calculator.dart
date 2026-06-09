@@ -7,6 +7,8 @@ class SafeCalculator extends StatelessWidget {
   final double? firstOperand;
   final String? operatorSymbol;
   final String? error;
+  /// Non null en mode configuration : affiche l'expression complète sur une ligne.
+  final String? expression;
   final ValueChanged<String> onDigit;
   final ValueChanged<String> onOperator;
   final VoidCallback onClear;
@@ -19,6 +21,7 @@ class SafeCalculator extends StatelessWidget {
     required this.firstOperand,
     required this.operatorSymbol,
     required this.error,
+    this.expression,
     required this.onDigit,
     required this.onOperator,
     required this.onClear,
@@ -42,23 +45,44 @@ class SafeCalculator extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                if (operatorSymbol != null)
+                if (expression != null)
+                  SizedBox(
+                    width: double.infinity,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        expression!.isEmpty ? '0' : expression!,
+                        style: const TextStyle(
+                          fontSize: 56,
+                          fontWeight: FontWeight.w300,
+                          color: AppColors.white,
+                          letterSpacing: -1,
+                        ),
+                        maxLines: 1,
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  )
+                else ...[
+                  if (operatorSymbol != null)
+                    Text(
+                      '${firstOperand?.toInt()} $operatorSymbol',
+                      style: TextStyle(
+                        fontSize: 18,
+                        color: AppColors.white.withOpacity(0.5),
+                      ),
+                    ),
                   Text(
-                    '${firstOperand?.toInt()} $operatorSymbol',
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: AppColors.white.withOpacity(0.5),
+                    display,
+                    style: const TextStyle(
+                      fontSize: 56,
+                      fontWeight: FontWeight.w300,
+                      color: AppColors.white,
+                      letterSpacing: -1,
                     ),
                   ),
-                Text(
-                  display,
-                  style: const TextStyle(
-                    fontSize: 56,
-                    fontWeight: FontWeight.w300,
-                    color: AppColors.white,
-                    letterSpacing: -1,
-                  ),
-                ),
+                ],
                 if (error != null)
                   Container(
                     margin: const EdgeInsets.only(top: 8),
