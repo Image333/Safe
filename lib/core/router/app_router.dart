@@ -13,6 +13,7 @@ class AppRouter {
   static const contacts = '/onboarding/contacts';
   static const trigger  = '/onboarding/trigger';
   static const pin      = '/onboarding/pin';
+  static const unlock   = '/unlock';
   static const home     = '/home';
   static const settings = '/settings';
 
@@ -22,7 +23,8 @@ class AppRouter {
       case profile:          return _fade(const ProfileScreen());
       case contacts:         return _fade(const ContactsScreen());
       case trigger:          return _fade(const TriggerScreen());
-      case pin:              return _fade(const PinScreen());
+      case pin:              return _fade(const PinScreen(mode: PinScreenMode.config));
+      case unlock:           return _fade(const PinScreen(mode: PinScreenMode.unlock));
       case home:             return _fade(const HomeScreen());
       case AppRouter.settings: return _fade(const SettingsScreen());
       default:               return _fade(const WelcomeScreen());

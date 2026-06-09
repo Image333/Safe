@@ -119,16 +119,12 @@ class _CalculatorKeypad extends StatelessWidget {
     return Column(
       children: [
         _buildRow([
-          _CalcKey(label: 'AC', onTap: onClear, type: KeyType.function),
           _CalcKey(label: '⌫', onTap: onDelete, type: KeyType.function),
+          _CalcKey(label: 'AC', onTap: onClear, type: KeyType.function),
+          _CalcKey(label: '%', onTap: () {}, type: KeyType.function),
           _CalcKey(
             label: '÷',
             onTap: () => onOperator('÷'),
-            type: KeyType.operator,
-          ),
-          _CalcKey(
-            label: '×',
-            onTap: () => onOperator('×'),
             type: KeyType.operator,
           ),
         ]),
@@ -137,8 +133,8 @@ class _CalculatorKeypad extends StatelessWidget {
           _CalcKey(label: '8', onTap: () => onDigit('8')),
           _CalcKey(label: '9', onTap: () => onDigit('9')),
           _CalcKey(
-            label: '−',
-            onTap: () => onOperator('−'),
+            label: '×',
+            onTap: () => onOperator('×'),
             type: KeyType.operator,
           ),
         ]),
@@ -147,8 +143,8 @@ class _CalculatorKeypad extends StatelessWidget {
           _CalcKey(label: '5', onTap: () => onDigit('5')),
           _CalcKey(label: '6', onTap: () => onDigit('6')),
           _CalcKey(
-            label: '+',
-            onTap: () => onOperator('+'),
+            label: '−',
+            onTap: () => onOperator('−'),
             type: KeyType.operator,
           ),
         ]),
@@ -156,11 +152,16 @@ class _CalculatorKeypad extends StatelessWidget {
           _CalcKey(label: '1', onTap: () => onDigit('1')),
           _CalcKey(label: '2', onTap: () => onDigit('2')),
           _CalcKey(label: '3', onTap: () => onDigit('3')),
-          _CalcKey(label: '=', onTap: onEqual, type: KeyType.equal),
+          _CalcKey(
+            label: '+',
+            onTap: () => onOperator('+'),
+            type: KeyType.operator,
+          ),
         ]),
         _buildRow([
-          _CalcKey(label: '0', onTap: () => onDigit('0'), wide: true),
-          _CalcKey(label: '.', onTap: () {}),
+          _CalcKey(label: '+/−', onTap: () {}, type: KeyType.function),
+          _CalcKey(label: '0', onTap: () => onDigit('0')),
+          _CalcKey(label: ',', onTap: () => onDigit('.')),
           _CalcKey(label: '=', onTap: onEqual, type: KeyType.equal),
         ]),
       ],
@@ -174,7 +175,6 @@ class _CalculatorKeypad extends StatelessWidget {
         children: keys
             .map(
               (k) => Expanded(
-                flex: k.wide ? 2 : 1,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 5),
                   child: k,
@@ -193,13 +193,11 @@ class _CalcKey extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   final KeyType type;
-  final bool wide;
 
   const _CalcKey({
     required this.label,
     required this.onTap,
     this.type = KeyType.digit,
-    this.wide = false,
   });
 
   Color get _bg {
