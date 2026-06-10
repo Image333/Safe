@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/router/app_router.dart';
+import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/storage/secret_pin_storage.dart';
 import '../../../core/theme/app_theme.dart';
+import '../widgets/calculator_camouflage_header.dart';
 import '../widgets/safe_calculator.dart';
 
 enum PinScreenMode { config, unlock }
@@ -22,6 +24,7 @@ class _PinScreenState extends State<PinScreen> {
 
   final _numberController = TextEditingController();
   final _pinStorage = SecretPinStorage();
+  final _camouflageService = AppCamouflageService();
 
   bool _confirming = false;
   bool _loadingUnlock = true;
@@ -218,6 +221,7 @@ class _PinScreenState extends State<PinScreen> {
 
     if (result == _secretNumber) {
       await _pinStorage.saveSecret(_secretNumber!);
+      await _camouflageService.enableCalculatorCamouflage();
       if (!mounted) return;
       _showSuccess();
     } else {
@@ -252,16 +256,20 @@ class _PinScreenState extends State<PinScreen> {
               child: Container(
                 width: 72,
                 height: 72,
-                decoration: const BoxDecoration(
-                  color: AppColors.greenLight,
-                  shape: BoxShape.circle,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3A3A3C),
+                  borderRadius: BorderRadius.circular(18),
                 ),
-                child: const Icon(Icons.check, color: AppColors.green, size: 40),
+                child: const Icon(
+                  Icons.calculate_rounded,
+                  color: AppColors.white,
+                  size: 40,
+                ),
               ),
             ),
             const SizedBox(height: 20),
             const Text(
-              'Code enregistré !',
+              'Camouflage activé !',
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.bold,
@@ -269,6 +277,12 @@ class _PinScreenState extends State<PinScreen> {
               ),
             ),
             const SizedBox(height: 10),
+            const Text(
+              'L\'application apparaît désormais comme une calculatrice sur votre écran d\'accueil.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: AppColors.grayMid, height: 1.5),
+            ),
+            const SizedBox(height: 12),
             RichText(
               textAlign: TextAlign.center,
               text: TextSpan(
@@ -370,18 +384,28 @@ class _PinScreenState extends State<PinScreen> {
     }
 
     return Scaffold(
+      backgroundColor: AppColors.white,
       body: SafeArea(
-        child: SafeCalculator(
-          display: _display,
-          firstOperand: _firstOperand,
-          operatorSymbol: _operator,
-          expression: _expression,
-          error: _error,
-          onDigit: _onDigit,
-          onOperator: _onOperator,
-          onClear: _onClear,
-          onDelete: _onDelete,
-          onEqual: _onEqual,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const CalculatorCamouflageHeader(),
+            const SizedBox(height: 8),
+            Expanded(
+              child: SafeCalculator(
+                display: _display,
+                firstOperand: _firstOperand,
+                operatorSymbol: _operator,
+                expression: _expression,
+                error: _error,
+                onDigit: _onDigit,
+                onOperator: _onOperator,
+                onClear: _onClear,
+                onDelete: _onDelete,
+                onEqual: _onEqual,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -422,7 +446,9 @@ class _PinScreenState extends State<PinScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                if (_confirming)
+                if (_confirming) ...[
+                  const CalculatorCamouflageHeader(),
+                  const SizedBox(height: 8),
                   Expanded(
                     child: SafeCalculator(
                       display: _display,
@@ -436,7 +462,8 @@ class _PinScreenState extends State<PinScreen> {
                       onDelete: _onDelete,
                       onEqual: _onEqual,
                     ),
-                  )
+                  ),
+                ]
                 else
                   Expanded(child: _buildNumberPicker()),
                 const SizedBox(height: 24),
