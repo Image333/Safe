@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/services/app_reset_service.dart';
+import '../../../core/theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -332,9 +333,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.red),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              // TODO : effacer flutter_secure_storage + shared_preferences
+              await AppResetService().resetAll();
+              if (!context.mounted) return;
+              Navigator.pushNamedAndRemoveUntil(
+                context,
+                AppRouter.welcome,
+                (_) => false,
+              );
             },
             child: const Text('Effacer'),
           ),

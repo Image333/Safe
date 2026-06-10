@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/router/app_router.dart';
 import '../../../core/services/app_camouflage_service.dart';
+import '../../../core/services/app_reset_service.dart';
 import '../../../core/storage/secret_pin_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../widgets/calculator_camouflage_header.dart';
@@ -339,6 +341,41 @@ class _PinScreenState extends State<PinScreen> {
     return '${n + 1}-1=';
   }
 
+  Future<void> _debugResetApp() async {
+    if (!kDebugMode) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Réinitialiser (debug)'),
+        content: const Text(
+          'Effacer toute la configuration et recommencer l\'onboarding ?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Réinitialiser'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    await AppResetService().resetAll();
+    if (!mounted) return;
+
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      AppRouter.welcome,
+      (_) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isUnlock) {
@@ -389,7 +426,17 @@ class _PinScreenState extends State<PinScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const CalculatorCamouflageHeader(),
+            CalculatorCamouflageHeader(
+              onLongPress: kDebugMode ? _debugResetApp : null,
+            ),
+            if (kDebugMode)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Text(
+                  'Debug : appui long sur « Calculatrice » pour réinitialiser',
+                  style: TextStyle(fontSize: 11, color: AppColors.grayMid),
+                ),
+              ),
             const SizedBox(height: 8),
             Expanded(
               child: SafeCalculator(

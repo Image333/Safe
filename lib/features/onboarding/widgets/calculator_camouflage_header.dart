@@ -3,11 +3,16 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 
 class CalculatorCamouflageHeader extends StatelessWidget {
-  const CalculatorCamouflageHeader({super.key});
+  final VoidCallback? onLongPress;
+
+  const CalculatorCamouflageHeader({super.key, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return GestureDetector(
+      onLongPress: onLongPress,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
       child: Row(
         children: [
@@ -36,6 +41,7 @@ class CalculatorCamouflageHeader extends StatelessWidget {
           ),
         ],
       ),
+    ),
     );
   }
 }

@@ -19,4 +19,6 @@ class SecretPinStorage {
       _storage.write(key: _key, value: secret);
 
   Future<void> clearSecret() => _storage.delete(key: _key);
+
+  Future<void> clearAll() => _storage.deleteAll();
 }
