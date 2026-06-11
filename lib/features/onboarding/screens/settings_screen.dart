@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/services/app_reset_service.dart';
+import '../../../core/storage/camouflage_storage.dart';
 import '../../../core/theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -10,6 +12,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  final _camouflageStorage = CamouflageStorage();
+  final _camouflageService = AppCamouflageService();
+
   // États des paramètres
   bool _camouflageEnabled = false;
   bool _vibrationConfirm  = true;
@@ -18,6 +23,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _camouflageApp   = 'meteo';
   bool _isLoggedIn        = false;
   String _userEmail       = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCamouflageSettings();
+  }
+
+  Future<void> _loadCamouflageSettings() async {
+    final enabled = await _camouflageStorage.isCalculatorCamouflageEnabled();
+    if (!mounted) return;
+    setState(() {
+      _camouflageEnabled = enabled;
+      if (enabled) _camouflageApp = 'calc';
+    });
+  }
+
+  Future<void> _onCamouflageChanged(bool enabled) async {
+    setState(() => _camouflageEnabled = enabled);
+    if (enabled) {
+      setState(() => _camouflageApp = 'calc');
+      await _camouflageService.enableCalculatorCamouflage();
+    } else {
+      await _camouflageService.disableCalculatorCamouflage();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +93,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: 'Mode camouflage',
                     subtitle: 'L\'app se déguise en une autre application',
                     value: _camouflageEnabled,
-                    onChanged: (v) => setState(() => _camouflageEnabled = v),
+                    onChanged: _onCamouflageChanged,
                   ),
                   if (_camouflageEnabled) _buildCamouflageSelector(),
                 ]),
@@ -86,7 +116,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     iconColor: AppColors.blue,
                     title: 'Modifier le code calculatrice',
                     subtitle: 'Changer votre nombre secret',
-                    onTap: () => Navigator.pushNamed(context, AppRouter.pin),
+                    onTap: () async {
+                      await Navigator.pushNamed(context, AppRouter.pin);
+                      _loadCamouflageSettings();
+                    },
                   ),
                 ]),
 
