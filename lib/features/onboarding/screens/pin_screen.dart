@@ -22,8 +22,6 @@ class PinScreen extends StatefulWidget {
 }
 
 class _PinScreenState extends State<PinScreen> {
-  static const _suggestions = ['7', '10', '13', '42', '100', '1994', '2000'];
-
   final _numberController = TextEditingController();
   final _pinStorage = SecretPinStorage();
   final _camouflageService = AppCamouflageService();
@@ -649,38 +647,6 @@ class _PinScreenState extends State<PinScreen> {
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             ),
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            'Suggestions',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.grayMid,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _suggestions.map((n) {
-              final selected = _numberController.text == n;
-              return ChoiceChip(
-                label: Text(n),
-                selected: selected,
-                onSelected: (_) {
-                  setState(() => _numberController.text = n);
-                },
-                selectedColor: AppColors.blueLight,
-                labelStyle: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: selected ? AppColors.navy : AppColors.gray,
-                ),
-                side: BorderSide(
-                  color: selected ? AppColors.blue : AppColors.grayLight,
-                ),
-              );
-            }).toList(),
           ),
           const Spacer(),
           ElevatedButton(
