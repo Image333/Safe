@@ -1,0 +1,54 @@
+name: safeg
+description: Application mobile de protection discrète contre les violences
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Navigation
+  go_router: ^13.0.0
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Storage local (PIN, préférences)
+  flutter_secure_storage: ^9.0.0
+  shared_preferences: ^2.2.3
+
+  # UI
+  google_fonts: ^6.2.1
+
+  # Permissions (micro, caméra, GPS)
+  permission_handler: ^11.3.1
+
+  # Icônes
+  flutter_svg: ^2.0.10+1
+  flutter_contacts: ^2.2.1
+  flutter_dynamic_icon: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  build_runner: ^2.4.9
+  riverpod_generator: ^2.4.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/icons/calculator_app_icon.png
+  adaptive_icon_background: "#3A3A3C"
+  adaptive_icon_foreground: assets/icons/calculator_app_icon.png
