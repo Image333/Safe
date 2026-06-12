@@ -121,7 +121,7 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 		if err != nil {
 			log.Printf("Erreur hachage: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Erreur interne du serveur",
+				"error": "Internal server error",
 			})
 		}
 
@@ -150,6 +150,43 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 	})
 
 	router.Use(ProtectedRoute())
+
+	//
+	// Delete User
+	//
+	router.Delete("/users/:email", func(c *fiber.Ctx) error {
+		emailParam := c.Params("email")
+		if emailParam == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Email requis",
+			})
+		}
+
+		query := `DELETE FROM users WHERE email = ?`
+
+		result, err := db.Exec(query, emailParam)
+		if err != nil {
+			log.Printf("Erreur SQL DELETE: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "Erreur lors de la suppression de l'utilisateur",
+			})
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Printf("Erreur récupération RowsAffected: %v", err)
+		}
+
+		if rowsAffected == 0 {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "Aucun utilisateur trouvé avec cet email",
+			})
+		}
+
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"message": "User deleted successfully",
+		})
+	})
 
 	//
 	// Get user by email

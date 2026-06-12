@@ -170,6 +170,33 @@ func TestGetUserByEmail_WithoutJWT(t *testing.T) {
 }
 
 // //
+// // Delete user
+// //
+
+func TestDeleteUser_Succes(t *testing.T) {
+	app, mock := setupTestEnv(t)
+	email := "bob@etna.fr"
+
+	mock.ExpectExec(`DELETE FROM users WHERE email = \?`).
+		WithArgs(email).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	req := httptest.NewRequest(http.MethodDelete, "/users/"+email, nil)
+
+	tokenString := generateTestJWT(t, 1, email)
+	req.Header.Set("Authorization", "Bearer "+tokenString)
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("Erreur exécution requête: %s", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusOK, resp.StatusCode)
+	}
+
+}
+
+// //
 // // Login
 // //
 func TestLogin_Success(t *testing.T) {

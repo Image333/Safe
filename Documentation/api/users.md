@@ -1,9 +1,11 @@
-Welcome to api documentation section
+# User documentation section
 
 key points :
  - [Create Users](#create-user)
+ - [Delete Users](#delete-user)
  - [Get Users](#get-user-by-email)
  - [User Login](#authentication---user-login)
+
 
 # Create User
 
@@ -179,6 +181,157 @@ This error is returned if password hashing fails or another unexpected server-si
 * The API does not return the user's password or password hash.
 * The newly created user's unique identifier is returned in the response.
 * Email uniqueness should be enforced at the database level to prevent duplicate accounts.
+
+# Delete User
+
+## Endpoint
+
+```http
+DELETE /users/:email
+```
+
+Deletes a user identified by their email address.
+
+This endpoint is **protected** and requires authentication using a JWT token.
+
+---
+
+## Authentication
+
+This endpoint requires a valid JWT token in the `Authorization` header.
+
+See: **[JWT Authentication section](#authentication---user-login)**
+
+```http
+Authorization: Bearer <token>
+```
+
+---
+
+## URL Parameters
+
+| Parameter | Type   | Required | Description                         |
+| --------- | ------ | -------- | ----------------------------------- |
+| email     | string | Yes      | Email address of the user to delete |
+
+### Example
+
+```http
+DELETE /users/john.doe@example.com
+```
+
+---
+
+## Successful Response
+
+### HTTP Status Code
+
+```http
+200 OK
+```
+
+### Response Body
+
+```json
+{
+  "message": "User deleted successfully"
+}
+```
+
+### Response Fields
+
+| Field   | Type   | Description                                                                 |
+| ------- | ------ | --------------------------------------------------------------------------- |
+| message | string | Confirmation message indicating that the user has been successfully deleted |
+
+---
+
+## Error Responses
+
+### Missing Email Parameter
+
+#### HTTP Status Code
+
+```http
+400 Bad Request
+```
+
+#### Response
+
+```json
+{
+  "error": "Email required"
+}
+```
+
+---
+
+### User Not Found
+
+Returned when no user exists with the specified email address.
+
+#### HTTP Status Code
+
+```http
+404 Not Found
+```
+
+#### Response
+
+```json
+{
+  "error": "No user found with this email"
+}
+```
+
+---
+
+### Internal Server Error
+
+Returned when a database error occurs during the deletion process.
+
+#### HTTP Status Code
+
+```http
+500 Internal Server Error
+```
+
+#### Response
+
+```json
+{
+  "error": "Error while deleting user"
+}
+```
+
+---
+
+## Security Notes
+
+* This endpoint is protected by **JWT authentication**.
+* A valid JWT token must be included in the `Authorization` header.
+* Requests without a valid token will be rejected by the authentication middleware.
+* Deleting a user is irreversible.
+
+See: **[JWT Authentication section](#authentication---user-login)**
+
+---
+
+## Example Request
+
+```http
+DELETE /users/john.doe@example.com
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI...
+```
+
+## Example Response
+
+```json
+{
+  "message": "User deleted successfully"
+}
+```
+
 
 
 # Authentication - User Login
