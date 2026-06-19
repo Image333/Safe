@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/services/auth_service.dart';
+import '../../core/services/api_service.dart';
 
 enum AuthMode { login, register }
 
@@ -27,10 +29,14 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
   bool _obscureConfirm = true;
   String? _error;
 
-  final _emailController    = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _confirmController  = TextEditingController();
+  final _emailController     = TextEditingController();
+  final _passwordController  = TextEditingController();
+  final _confirmController   = TextEditingController();
+  final _firstnameController = TextEditingController();
+  final _nameController      = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  
+  final _authService = AuthService();
 
   late AnimationController _slideController;
   late Animation<Offset> _slideAnim;
@@ -54,6 +60,9 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
     _emailController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
+    _firstnameController.dispose();
+    _nameController.dispose();
+    _authService.dispose();
     super.dispose();
   }
 
@@ -63,6 +72,8 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
       _error = null;
       _passwordController.clear();
       _confirmController.clear();
+      _firstnameController.clear();
+      _nameController.clear();
     });
   }
 
@@ -71,15 +82,40 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
 
     setState(() { _loading = true; _error = null; });
 
-    // Simule un appel API — à brancher sur Cognito en Année 2
-    await Future.delayed(const Duration(milliseconds: 1500));
+    try {
+      if (_mode == AuthMode.login) {
+        // Connexion
+        await _authService.login(
+          email: _emailController.text.trim(),
+          password: _passwordController.text,
+        );
+      } else {
+        // Création de compte
+        await _authService.register(
+          email: _emailController.text.trim(),
+          password: _passwordController.text,
+          firstname: _firstnameController.text.trim(),
+          name: _nameController.text.trim(),
+        );
+      }
 
-    if (!mounted) return;
-    setState(() => _loading = false);
-
-    // TODO : vrai appel Cognito
-    // Pour l'instant on simule un succès
-    _showSuccess();
+      if (!mounted) return;
+      setState(() => _loading = false);
+      _showSuccess();
+      
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Une erreur est survenue. Vérifiez votre connexion.';
+      });
+    }
   }
 
   void _showSuccess() {
@@ -168,6 +204,36 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
           Form(
             key: _formKey,
             child: Column(children: [
+              // Nom et prénom (uniquement en mode register)
+              AnimatedSize(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                child: _mode == AuthMode.register
+                  ? Column(children: [
+                      _buildField(
+                        controller: _nameController,
+                        label: 'Nom',
+                        icon: Icons.person_outline,
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Nom requis';
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      _buildField(
+                        controller: _firstnameController,
+                        label: 'Prénom',
+                        icon: Icons.person_outline,
+                        validator: (v) {
+                          if (v == null || v.isEmpty) return 'Prénom requis';
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                    ])
+                  : const SizedBox.shrink(),
+              ),
+              
               // Email
               _buildField(
                 controller: _emailController,
@@ -312,7 +378,7 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
             color: selected ? AppColors.white : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
             boxShadow: selected
-              ? [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 6, offset: const Offset(0, 2))]
+              ? [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 6, offset: const Offset(0, 2))]
               : [],
           ),
           child: Center(
