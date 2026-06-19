@@ -33,4 +33,4 @@ Content-Type: application/json
 > **Note:** Unless otherwise specified, all endpoint paths shown throughout this documentation are relative to the `/api/v1` base path.
 
 # Documented enpoints
-- [Users](./users.md)
+- [Users](./endpoints/users.md)
