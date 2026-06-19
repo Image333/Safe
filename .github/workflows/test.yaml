@@ -1,6 +1,9 @@
 name: Tests && build
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  release:
 
 jobs:
   test:
