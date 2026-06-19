@@ -24,6 +24,9 @@ dependencies:
   # UI
   google_fonts: ^6.2.1
 
+  # HTTP client
+  http: ^1.2.0
+
   # Permissions (micro, caméra, GPS)
   permission_handler: ^11.3.1
 
