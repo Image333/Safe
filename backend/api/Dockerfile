@@ -12,5 +12,6 @@ RUN go build -o gpe .
 FROM alpine:latest
 WORKDIR /app
 COPY --from=build /app/gpe .
+COPY --from=build /app/migrations migrations/
 
 CMD ["./gpe"]
