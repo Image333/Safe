@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/services/app_reset_service.dart';
+import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/storage/camouflage_storage.dart';
 import '../../../core/theme/app_theme.dart';
 
@@ -14,12 +15,16 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _camouflageStorage = CamouflageStorage();
   final _camouflageService = AppCamouflageService();
+  final _voiceTriggerService = VoiceTriggerService();
+  final _keywordController = TextEditingController();
 
   // États des paramètres
   bool _camouflageEnabled = false;
   bool _vibrationConfirm  = true;
   bool _offlineMode       = true;
   String _selectedTrigger = 'volume';
+  bool _voiceTriggerArmed = false;
+  int _voiceRecordingDurationSec = 15;
   String _camouflageApp   = 'meteo';
   bool _isLoggedIn        = false;
   String _userEmail       = '';
@@ -28,6 +33,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _loadCamouflageSettings();
+    _loadVoiceTriggerSettings();
+  }
+
+  @override
+  void dispose() {
+    _keywordController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCamouflageSettings() async {
@@ -47,6 +59,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       await _camouflageService.disableCalculatorCamouflage();
     }
+  }
+
+  Future<void> _loadVoiceTriggerSettings() async {
+    final config = await _voiceTriggerService.getConfig();
+    if (!mounted) return;
+
+    setState(() {
+      _voiceTriggerArmed = config.armed;
+      _voiceRecordingDurationSec = config.recordingDurationSec;
+      _keywordController.text = config.keyword ?? '';
+      if (_voiceTriggerArmed || (config.keyword != null && config.keyword!.isNotEmpty)) {
+        _selectedTrigger = 'keyword';
+      }
+    });
+  }
+
+  Future<void> _onVoiceTriggerArmedChanged(bool armed) async {
+    try {
+      final keyword = _keywordController.text.trim();
+      if (armed) {
+        if (keyword.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Renseignez un mot-clé avant d\'activer.')),
+          );
+          return;
+        }
+        await _voiceTriggerService.saveConfig(
+          keyword: keyword,
+          recordingDurationSec: _voiceRecordingDurationSec,
+        );
+        await _voiceTriggerService.arm();
+      } else {
+        await _voiceTriggerService.disarm();
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _voiceTriggerArmed = armed;
+        _selectedTrigger = armed ? 'keyword' : _selectedTrigger;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('StateError: ', ''))),
+      );
+    }
+  }
+
+  Future<void> _saveKeywordOnly() async {
+    final keyword = _keywordController.text.trim();
+    if (keyword.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Le mot-clé ne peut pas être vide.')),
+      );
+      return;
+    }
+
+    await _voiceTriggerService.saveConfig(
+      keyword: keyword,
+      recordingDurationSec: _voiceRecordingDurationSec,
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Mot-clé enregistré.')),
+    );
   }
 
   @override
@@ -83,6 +161,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 _buildSection('Déclencheur', [
                   _buildTriggerSelector(),
+                  if (_selectedTrigger == 'keyword') _buildKeywordTriggerSettings(),
                 ]),
 
                 _buildSection('Camouflage', [
@@ -281,19 +360,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final options = [
       (value: 'volume',  icon: Icons.volume_down_outlined, label: '3× bouton volume'),
       (value: 'shake',   icon: Icons.vibration,            label: 'Secouer'),
+      (value: 'keyword', icon: Icons.mic_none_outlined,    label: 'Mot-clé vocal'),
     ];
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Mode de déclenchement', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.gray)),
         const SizedBox(height: 12),
-        Row(children: options.map((o) {
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: options.map((o) {
           final selected = _selectedTrigger == o.value;
-          return Expanded(child: GestureDetector(
+          return SizedBox(
+            width: (MediaQuery.of(context).size.width - 72) / 2,
+            child: GestureDetector(
             onTap: () => setState(() => _selectedTrigger = o.value),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              margin: EdgeInsets.only(right: o.value == 'volume' ? 8 : 0),
               padding: const EdgeInsets.symmetric(vertical: 12),
               decoration: BoxDecoration(
                 color: selected ? AppColors.blueLight : AppColors.grayLight,
@@ -306,9 +390,78 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(o.label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: selected ? AppColors.blue : AppColors.grayMid), textAlign: TextAlign.center),
               ]),
             ),
-          ));
-        }).toList()),
+            ),
+          );
+        }).toList(),
+        ),
       ]),
+    );
+  }
+
+  Widget _buildKeywordTriggerSettings() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.grayLight,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Déclencheur vocal (bêta)',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: AppColors.navy,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Fonctionne en arrière-plan. iOS nécessite le mode audio actif.',
+              style: TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _keywordController,
+              decoration: const InputDecoration(
+                labelText: 'Mot-clé',
+                hintText: 'Ex: j\'ai oublié mes clés',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saveKeywordOnly,
+                    child: const Text('Enregistrer le mot-clé'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Switch(
+                  value: _voiceTriggerArmed,
+                  onChanged: _onVoiceTriggerArmedChanged,
+                  activeColor: AppColors.navy,
+                ),
+              ],
+            ),
+            Text(
+              _voiceTriggerArmed
+                  ? 'Surveillance armée • clip ${_voiceRecordingDurationSec}s'
+                  : 'Surveillance désactivée',
+              style: TextStyle(
+                fontSize: 12,
+                color: _voiceTriggerArmed ? AppColors.green : AppColors.grayMid,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

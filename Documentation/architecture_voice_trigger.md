@@ -62,6 +62,8 @@ Canal: `safe/voice_trigger`
 
 - Storage et service Flutter créés.
 - Permissions déclarées iOS/Android.
+- Bridge `MethodChannel` iOS + Android branché (`safe/voice_trigger`).
+- Android: foreground service de base avec notification persistante.
 
 ### Phase 1 - POC iOS local
 

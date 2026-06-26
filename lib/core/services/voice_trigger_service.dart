@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../storage/voice_trigger_storage.dart';
 
@@ -57,6 +58,11 @@ class VoiceTriggerService {
       throw StateError('Veuillez définir un mot-clé avant d\'armer le système.');
     }
 
+    final micStatus = await Permission.microphone.request();
+    if (!micStatus.isGranted) {
+      throw StateError('Permission micro refusée. Activez-la dans les réglages.');
+    }
+
     await _storage.setArmed(true);
 
     await _channel.invokeMethod<void>('startListening', {
@@ -78,6 +84,12 @@ class VoiceTriggerService {
     final recordingDurationSec = await _storage.getRecordingDurationSec();
 
     if (keyword == null || keyword.trim().isEmpty) {
+      await _storage.setArmed(false);
+      return;
+    }
+
+    final micStatus = await Permission.microphone.status;
+    if (!micStatus.isGranted) {
       await _storage.setArmed(false);
       return;
     }

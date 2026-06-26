@@ -37,9 +37,9 @@ class _TriggerScreenState extends State<TriggerScreen> {
       icon: Icons.mic_none_outlined,
       title: 'Mot-clé vocal',
       subtitle: 'Prononcez un mot secret pour déclencher',
-      badge: 'Bientôt',
-      badgeColor: AppColors.grayMid,
-      badgeBg: AppColors.grayLight,
+      badge: 'Nouveau',
+      badgeColor: AppColors.blue,
+      badgeBg: AppColors.blueLight,
     ),
   ];
 
@@ -65,10 +65,8 @@ class _TriggerScreenState extends State<TriggerScreen> {
               badgeColor: t.badgeColor,
               badgeBg: t.badgeBg,
               selected: _selected == t.value,
-              disabled: t.value == TriggerType.keyword,
-              onTap: t.value == TriggerType.keyword
-                  ? null
-                  : () => setState(() => _selected = t.value),
+              disabled: false,
+              onTap: () => setState(() => _selected = t.value),
             ))),
             if (_selected == TriggerType.volume) ...[
               const SizedBox(height: 8),
