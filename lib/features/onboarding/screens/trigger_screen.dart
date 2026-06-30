@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/services/voice_trigger_service.dart';
 
 enum TriggerType { volume, shake, keyword }
 
@@ -12,6 +16,8 @@ class TriggerScreen extends StatefulWidget {
 
 class _TriggerScreenState extends State<TriggerScreen> {
   TriggerType? _selected;
+  final _voiceTriggerService = VoiceTriggerService();
+  String? _configuredKeyword;
 
   final _triggers = [
     (
@@ -66,7 +72,13 @@ class _TriggerScreenState extends State<TriggerScreen> {
               badgeBg: t.badgeBg,
               selected: _selected == t.value,
               disabled: false,
-              onTap: () => setState(() => _selected = t.value),
+              onTap: () {
+                if (t.value == TriggerType.keyword) {
+                  _onKeywordTriggerSelected();
+                  return;
+                }
+                setState(() => _selected = t.value);
+              },
             ))),
             if (_selected == TriggerType.volume) ...[
               const SizedBox(height: 8),
@@ -107,6 +119,96 @@ class _TriggerScreenState extends State<TriggerScreen> {
         ),
       ),
     )));
+  }
+}
+
+extension on _TriggerScreenState {
+  Future<void> _onKeywordTriggerSelected() async {
+    final keyword = await _showKeywordDialog();
+    if (!mounted || keyword == null) return;
+
+    try {
+      await _voiceTriggerService.saveConfig(keyword: keyword);
+
+      if (Platform.isIOS) {
+        final status = await Permission.microphone.request();
+        if (!mounted) return;
+
+        if (!status.isGranted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Micro refusé. Activez-le dans Réglages pour le mot-clé vocal.'),
+              action: SnackBarAction(
+                label: 'Réglages',
+                onPressed: openAppSettings,
+              ),
+            ),
+          );
+          return;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _configuredKeyword = keyword;
+        _selected = TriggerType.keyword;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Mot-clé vocal enregistré: "$keyword"')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Impossible de configurer le mot-clé vocal.')),
+      );
+    }
+  }
+
+  Future<String?> _showKeywordDialog() async {
+    final controller = TextEditingController(text: _configuredKeyword ?? '');
+
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Choisir un mot-clé vocal'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              labelText: 'Mot-clé',
+              hintText: 'Ex: j\'ai oublié mes clés',
+            ),
+            onSubmitted: (_) {
+              final keyword = controller.text.trim();
+              if (keyword.isNotEmpty) {
+                Navigator.of(dialogContext).pop(keyword);
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Annuler'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final keyword = controller.text.trim();
+                if (keyword.isEmpty) return;
+                Navigator.of(dialogContext).pop(keyword);
+              },
+              child: const Text('Valider'),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+    return value;
   }
 }
 

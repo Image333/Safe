@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/services/app_reset_service.dart';
@@ -17,6 +20,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _camouflageService = AppCamouflageService();
   final _voiceTriggerService = VoiceTriggerService();
   final _keywordController = TextEditingController();
+  static const int _voiceDurationStepSec = 5;
 
   // États des paramètres
   bool _camouflageEnabled = false;
@@ -85,6 +89,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
           return;
         }
+
+        final granted = await _confirmAndRequestMicrophonePermission();
+        if (!mounted || !granted) return;
+
         await _persistVoiceConfig(keyword: keyword);
         await _voiceTriggerService.arm();
       } else {
@@ -115,10 +123,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     await _persistVoiceConfig(keyword: keyword);
 
+    if (Platform.isIOS) {
+      final granted = await _ensureMicrophonePermissionForIos();
+      if (!mounted) return;
+
+      if (!granted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Autorisez le micro pour utiliser le déclencheur vocal.'),
+            action: SnackBarAction(
+              label: 'Réglages',
+              onPressed: openAppSettings,
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Mot-clé enregistré.')),
     );
+  }
+
+  Future<bool> _ensureMicrophonePermissionForIos() async {
+    var status = await Permission.microphone.status;
+    if (status.isGranted) return true;
+
+    status = await Permission.microphone.request();
+    return status.isGranted;
+  }
+
+  Future<bool> _confirmAndRequestMicrophonePermission() async {
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Autorisation micro'),
+        content: const Text(
+          'Pour activer le mot-clé vocal, Safe a besoin d\'accéder au microphone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Autoriser'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRequest != true || !mounted) return false;
+
+    final status = await Permission.microphone.request();
+    if (status.isGranted) return true;
+
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Autorisez le micro pour activer le mot-clé vocal.'),
+        action: SnackBarAction(
+          label: 'Réglages',
+          onPressed: openAppSettings,
+        ),
+      ),
+    );
+
+    return false;
   }
 
   Future<void> _persistVoiceConfig({String? keyword}) async {
@@ -135,16 +210,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _setVoiceRecordingDuration(int seconds) async {
-    final clamped = seconds
+    final clamped = (seconds / _voiceDurationStepSec).round() * _voiceDurationStepSec;
+    final bounded = clamped
         .clamp(
           VoiceTriggerService.minRecordingDurationSec,
           VoiceTriggerService.maxRecordingDurationSec,
         )
         .toInt();
 
-    if (clamped == _voiceRecordingDurationSec) return;
+    if (bounded == _voiceRecordingDurationSec) return;
 
-    setState(() => _voiceRecordingDurationSec = clamped);
+    setState(() => _voiceRecordingDurationSec = bounded);
 
     final keyword = _keywordController.text.trim();
     if (keyword.isEmpty) return;
@@ -504,8 +580,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               value: _voiceRecordingDurationSec.toDouble(),
               min: VoiceTriggerService.minRecordingDurationSec.toDouble(),
               max: VoiceTriggerService.maxRecordingDurationSec.toDouble(),
-              divisions: VoiceTriggerService.maxRecordingDurationSec -
-                  VoiceTriggerService.minRecordingDurationSec,
+              divisions: (VoiceTriggerService.maxRecordingDurationSec -
+                  VoiceTriggerService.minRecordingDurationSec) ~/
+                  _voiceDurationStepSec,
               label: _formatDuration(_voiceRecordingDurationSec),
               activeColor: AppColors.navy,
               onChanged: (value) => _setVoiceRecordingDuration(value.round()),

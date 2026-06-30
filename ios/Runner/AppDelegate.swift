@@ -5,47 +5,55 @@ import AVFoundation
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private let voiceTriggerCoordinator = VoiceTriggerCoordinator()
+  private var voiceTriggerMethodChannel: FlutterMethodChannel?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
-
-    if let controller = window?.rootViewController as? FlutterViewController {
-      let channel = FlutterMethodChannel(
-        name: "safe/voice_trigger",
-        binaryMessenger: controller.binaryMessenger
-      )
-
-      channel.setMethodCallHandler { [weak self] call, callback in
-        guard let self else {
-          callback(FlutterError(code: "unavailable", message: "AppDelegate unavailable", details: nil))
-          return
-        }
-
-        switch call.method {
-        case "startListening":
-          do {
-            try self.voiceTriggerCoordinator.startListening(arguments: call.arguments)
-            callback(nil)
-          } catch {
-            callback(FlutterError(code: "start_failed", message: error.localizedDescription, details: nil))
-          }
-        case "stopListening":
-          self.voiceTriggerCoordinator.stopListening()
-          callback(nil)
-        default:
-          callback(FlutterMethodNotImplemented)
-        }
-      }
-    }
-
-    return result
+    super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    return true
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
-    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    let pluginRegistry = engineBridge.pluginRegistry
+    GeneratedPluginRegistrant.register(with: pluginRegistry)
+
+    if let registrar = pluginRegistry.registrar(forPlugin: "VoiceTriggerChannel") {
+      let messenger = registrar.messenger()
+      setUpVoiceTriggerChannel(binaryMessenger: messenger)
+    }
+  }
+
+  private func setUpVoiceTriggerChannel(binaryMessenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "safe/voice_trigger",
+      binaryMessenger: binaryMessenger
+    )
+
+    channel.setMethodCallHandler { [weak self] call, callback in
+      guard let self else {
+        callback(FlutterError(code: "unavailable", message: "AppDelegate unavailable", details: nil))
+        return
+      }
+
+      switch call.method {
+      case "startListening":
+        do {
+          try self.voiceTriggerCoordinator.startListening(arguments: call.arguments)
+          callback(nil)
+        } catch {
+          callback(FlutterError(code: "start_failed", message: error.localizedDescription, details: nil))
+        }
+      case "stopListening":
+        self.voiceTriggerCoordinator.stopListening()
+        callback(nil)
+      default:
+        callback(FlutterMethodNotImplemented)
+      }
+    }
+
+    voiceTriggerMethodChannel = channel
   }
 }
 

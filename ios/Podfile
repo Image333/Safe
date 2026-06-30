@@ -43,6 +43,7 @@ post_install do |installer|
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
         'PERMISSION_CONTACTS=1',
+        'PERMISSION_MICROPHONE=1',
       ]
     end
   end
