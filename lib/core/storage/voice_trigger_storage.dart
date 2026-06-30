@@ -5,6 +5,10 @@ class VoiceTriggerStorage {
   static const _keywordKey = 'voice_trigger_keyword';
   static const _recordingDurationSecKey = 'voice_trigger_recording_duration_sec';
 
+  static const int defaultRecordingDurationSec = 15;
+  static const int minRecordingDurationSec = 5;
+  static const int maxRecordingDurationSec = 600;
+
   Future<bool> isArmed() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_armedKey) ?? false;
@@ -30,11 +34,15 @@ class VoiceTriggerStorage {
 
   Future<int> getRecordingDurationSec() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_recordingDurationSecKey) ?? 15;
+    final stored = prefs.getInt(_recordingDurationSecKey);
+    if (stored == null) return defaultRecordingDurationSec;
+    return stored.clamp(minRecordingDurationSec, maxRecordingDurationSec).toInt();
   }
 
   Future<void> setRecordingDurationSec(int durationSec) async {
-    final safeDuration = durationSec.clamp(5, 30).toInt();
+    final safeDuration = durationSec
+        .clamp(minRecordingDurationSec, maxRecordingDurationSec)
+        .toInt();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_recordingDurationSecKey, safeDuration);
   }

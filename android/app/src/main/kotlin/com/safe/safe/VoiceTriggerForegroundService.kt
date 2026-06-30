@@ -17,7 +17,9 @@ class VoiceTriggerForegroundService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val keyword = intent.getStringExtra(EXTRA_KEYWORD).orEmpty()
-                val duration = intent.getIntExtra(EXTRA_RECORDING_DURATION_SEC, 15)
+                val duration = intent
+                    .getIntExtra(EXTRA_RECORDING_DURATION_SEC, 15)
+                    .coerceIn(MIN_RECORDING_DURATION_SEC, MAX_RECORDING_DURATION_SEC)
                 startVoiceTrigger(keyword, duration)
             }
 
@@ -40,7 +42,7 @@ class VoiceTriggerForegroundService : Service() {
         val notification = buildNotification(keyword, durationSec)
         startForeground(NOTIFICATION_ID, notification)
 
-        // TODO: Brancher ici le moteur wake-word + capture audio 15s.
+        // TODO: Brancher ici le moteur wake-word + capture audio durationSec.
         isListening = true
     }
 
@@ -86,5 +88,7 @@ class VoiceTriggerForegroundService : Service() {
 
         private const val CHANNEL_ID = "safe_voice_trigger_channel"
         private const val NOTIFICATION_ID = 2401
+        private const val MIN_RECORDING_DURATION_SEC = 5
+        private const val MAX_RECORDING_DURATION_SEC = 600
     }
 }

@@ -24,7 +24,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _offlineMode       = true;
   String _selectedTrigger = 'volume';
   bool _voiceTriggerArmed = false;
-  int _voiceRecordingDurationSec = 15;
+  int _voiceRecordingDurationSec = VoiceTriggerService.defaultRecordingDurationSec;
   String _camouflageApp   = 'meteo';
   bool _isLoggedIn        = false;
   String _userEmail       = '';
@@ -85,10 +85,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
           return;
         }
-        await _voiceTriggerService.saveConfig(
-          keyword: keyword,
-          recordingDurationSec: _voiceRecordingDurationSec,
-        );
+        await _persistVoiceConfig(keyword: keyword);
         await _voiceTriggerService.arm();
       } else {
         await _voiceTriggerService.disarm();
@@ -116,15 +113,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
-    await _voiceTriggerService.saveConfig(
-      keyword: keyword,
-      recordingDurationSec: _voiceRecordingDurationSec,
-    );
+    await _persistVoiceConfig(keyword: keyword);
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Mot-clé enregistré.')),
     );
+  }
+
+  Future<void> _persistVoiceConfig({String? keyword}) async {
+    final safeKeyword = (keyword ?? _keywordController.text).trim();
+    await _voiceTriggerService.saveConfig(
+      keyword: safeKeyword,
+      recordingDurationSec: _voiceRecordingDurationSec,
+    );
+
+    if (_voiceTriggerArmed) {
+      await _voiceTriggerService.disarm();
+      await _voiceTriggerService.arm();
+    }
+  }
+
+  Future<void> _setVoiceRecordingDuration(int seconds) async {
+    final clamped = seconds
+        .clamp(
+          VoiceTriggerService.minRecordingDurationSec,
+          VoiceTriggerService.maxRecordingDurationSec,
+        )
+        .toInt();
+
+    if (clamped == _voiceRecordingDurationSec) return;
+
+    setState(() => _voiceRecordingDurationSec = clamped);
+
+    final keyword = _keywordController.text.trim();
+    if (keyword.isEmpty) return;
+
+    try {
+      await _persistVoiceConfig(keyword: keyword);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Impossible de mettre à jour la durée.')),
+      );
+    }
+  }
+
+  String _formatDuration(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final minutes = seconds ~/ 60;
+    final remaining = seconds % 60;
+    if (remaining == 0) return '${minutes}min';
+    return '${minutes}min ${remaining}s';
   }
 
   @override
@@ -433,6 +473,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            const Text(
+              'Durée du clip après détection',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.gray,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [15, 30, 60, 120].map((value) {
+                final selected = _voiceRecordingDurationSec == value;
+                return ChoiceChip(
+                  label: Text(_formatDuration(value)),
+                  selected: selected,
+                  onSelected: (_) => _setVoiceRecordingDuration(value),
+                  selectedColor: AppColors.blueLight,
+                  labelStyle: TextStyle(
+                    color: selected ? AppColors.blue : AppColors.grayMid,
+                    fontWeight: FontWeight.w600,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            Slider(
+              value: _voiceRecordingDurationSec.toDouble(),
+              min: VoiceTriggerService.minRecordingDurationSec.toDouble(),
+              max: VoiceTriggerService.maxRecordingDurationSec.toDouble(),
+              divisions: VoiceTriggerService.maxRecordingDurationSec -
+                  VoiceTriggerService.minRecordingDurationSec,
+              label: _formatDuration(_voiceRecordingDurationSec),
+              activeColor: AppColors.navy,
+              onChanged: (value) => _setVoiceRecordingDuration(value.round()),
+            ),
+            Text(
+              'Actuel: ${_formatDuration(_voiceRecordingDurationSec)} (max ${_formatDuration(VoiceTriggerService.maxRecordingDurationSec)})',
+              style: const TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+            const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
@@ -451,7 +533,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             Text(
               _voiceTriggerArmed
-                  ? 'Surveillance armée • clip ${_voiceRecordingDurationSec}s'
+                  ? 'Surveillance armée • clip ${_formatDuration(_voiceRecordingDurationSec)}'
                   : 'Surveillance désactivée',
               style: TextStyle(
                 fontSize: 12,

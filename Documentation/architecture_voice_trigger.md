@@ -1,11 +1,11 @@
-# Architecture - Déclenchement vocal d'urgence (15 secondes)
+# Architecture - Déclenchement vocal d'urgence (durée modulable)
 
 ## Objectif
 
 Mettre en place un mode **armé** qui:
 - écoute en continu un mot-clé choisi par l'utilisateur,
 - fonctionne en arrière-plan,
-- déclenche un enregistrement audio de 15 secondes après détection,
+- déclenche un enregistrement audio avec durée configurable (15s par défaut, 2 min possible),
 - reste compatible iOS (écran verrouillé) et Android.
 
 ## Contraintes produit et plateforme
@@ -27,7 +27,7 @@ Mettre en place un mode **armé** qui:
 
 - Démarrage d'une écoute continue à faible latence.
 - Détection wake-word locale (on-device) via moteur dédié.
-- Au match: découpage d'un clip de 15 secondes.
+- Au match: découpage d'un clip de durée configurable.
 - Retour d'événements vers Flutter (détection, début/fin enregistrement, erreurs).
 
 ### 3) Backend (phase 2)
@@ -46,6 +46,7 @@ Canal: `safe/voice_trigger`
   - payload:
     - `keyword: String`
     - `recordingDurationSec: int`
+      - bornes recommandées: `5..600`
 - `stopListening`
 
 ### Événements Natif -> Flutter (EventChannel recommandé)
@@ -69,13 +70,13 @@ Canal: `safe/voice_trigger`
 
 - Implémenter le canal natif dans `AppDelegate.swift`.
 - Configurer `AVAudioSession` (`playAndRecord` + options adaptées).
-- Détection wake-word + enregistrement 15s.
+- Détection wake-word + enregistrement à durée configurable.
 - Vérifier comportement lock screen.
 
 ### Phase 2 - POC Android local
 
 - Service foreground + notification persistante.
-- Détection wake-word + enregistrement 15s.
+- Détection wake-word + enregistrement à durée configurable.
 
 ### Phase 3 - Intégration produit
 
@@ -95,7 +96,7 @@ Canal: `safe/voice_trigger`
 
 - Mode armé activable/désactivable depuis l'app.
 - Détection mot-clé < 1.5 s en médiane.
-- Enregistrement clip 15 s stable sur 10 déclenchements consécutifs.
+- Enregistrement clip stable sur 10 déclenchements consécutifs pour plusieurs durées (15s, 60s, 120s).
 - iOS: fonctionnement en arrière-plan écran verrouillé tant que l'app est active en mode armé.
 - Aucun crash si la couche native est indisponible.
 

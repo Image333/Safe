@@ -25,6 +25,13 @@ class VoiceTriggerService {
   static const MethodChannel _channel =
       MethodChannel('safe/voice_trigger');
 
+  static const int defaultRecordingDurationSec =
+    VoiceTriggerStorage.defaultRecordingDurationSec;
+  static const int minRecordingDurationSec =
+    VoiceTriggerStorage.minRecordingDurationSec;
+  static const int maxRecordingDurationSec =
+    VoiceTriggerStorage.maxRecordingDurationSec;
+
   final VoiceTriggerStorage _storage;
 
   VoiceTriggerService({VoiceTriggerStorage? storage})
@@ -44,10 +51,14 @@ class VoiceTriggerService {
 
   Future<void> saveConfig({
     required String keyword,
-    int recordingDurationSec = 15,
+    int recordingDurationSec = defaultRecordingDurationSec,
   }) async {
+    final safeDuration = recordingDurationSec
+        .clamp(minRecordingDurationSec, maxRecordingDurationSec)
+        .toInt();
+
     await _storage.setKeyword(keyword);
-    await _storage.setRecordingDurationSec(recordingDurationSec);
+    await _storage.setRecordingDurationSec(safeDuration);
   }
 
   Future<void> arm() async {

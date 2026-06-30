@@ -7,6 +7,8 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 	private val voiceTriggerChannel = "safe/voice_trigger"
+	private val minRecordingDurationSec = 5
+	private val maxRecordingDurationSec = 600
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
@@ -17,7 +19,8 @@ class MainActivity : FlutterActivity() {
 					"startListening" -> {
 						val args = call.arguments as? Map<*, *>
 						val keyword = (args?.get("keyword") as? String)?.trim().orEmpty()
-						val duration = (args?.get("recordingDurationSec") as? Int) ?: 15
+						val rawDuration = (args?.get("recordingDurationSec") as? Int) ?: 15
+						val duration = rawDuration.coerceIn(minRecordingDurationSec, maxRecordingDurationSec)
 
 						if (keyword.isBlank()) {
 							result.error("invalid_arguments", "keyword manquant", null)
