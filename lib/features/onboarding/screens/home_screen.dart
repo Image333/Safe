@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/services/emergency_audio_service.dart';
+import '../../../core/services/voice_trigger_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -11,6 +13,11 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isProtected = true;
   bool _alertSent = false;
+  bool _isRecordingClip = false;
+  String? _lastClipPath;
+
+  final VoiceTriggerService _voiceTriggerService = VoiceTriggerService();
+  final EmergencyAudioService _emergencyAudioService = EmergencyAudioService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -68,6 +75,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pulseController1.dispose();
     _pulseController2.dispose();
     _pressController.dispose();
+    _emergencyAudioService.dispose();
     super.dispose();
   }
 
@@ -131,7 +139,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _triggerAlert() {
     setState(() => _alertSent = true);
-    // TODO : appel backend Go + enregistrement audio + GPS
+    _recordEmergencyClip();
+
+    // TODO : appel backend Go + GPS
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: AppColors.red,
@@ -149,6 +159,72 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     Future.delayed(const Duration(seconds: 5), () {
       if (mounted) setState(() => _alertSent = false);
     });
+  }
+
+  Future<void> _recordEmergencyClip() async {
+    if (_isRecordingClip) return;
+
+    setState(() => _isRecordingClip = true);
+
+    try {
+      final config = await _voiceTriggerService.getConfig();
+      final durationSec = config.recordingDurationSec;
+
+      final path = await _emergencyAudioService.recordClip(
+        durationSec: durationSec,
+      );
+
+      if (!mounted) return;
+      setState(() => _lastClipPath = path);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.navy,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Row(
+            children: [
+              const Icon(Icons.mic, color: AppColors.white),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Clip audio enregistré (${_formatDuration(durationSec)}).',
+                  style: const TextStyle(
+                    color: AppColors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.red,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Text(
+            'Échec enregistrement audio : $e',
+            style: const TextStyle(color: AppColors.white),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isRecordingClip = false);
+      }
+    }
+  }
+
+  String _formatDuration(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final minutes = seconds ~/ 60;
+    final remaining = seconds % 60;
+    if (remaining == 0) return '${minutes}min';
+    return '${minutes}min ${remaining}s';
   }
 
   @override
@@ -336,7 +412,32 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           'Ou appuyez 3× sur le bouton volume',
           style: TextStyle(fontSize: 13, color: AppColors.grayMid),
         ),
-      ]
+      ],
+      if (_isRecordingClip) ...[
+        const SizedBox(height: 10),
+        const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 8),
+            Text(
+              'Enregistrement audio en cours…',
+              style: TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+          ],
+        ),
+      ] else if (_lastClipPath != null) ...[
+        const SizedBox(height: 10),
+        const Text(
+          'Dernier clip audio enregistré localement.',
+          style: TextStyle(fontSize: 12, color: AppColors.grayMid),
+          textAlign: TextAlign.center,
+        ),
+      ],
     ]);
   }
 
