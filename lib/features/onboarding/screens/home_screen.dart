@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:volume_watcher/volume_watcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/emergency_audio_service.dart';
@@ -15,6 +16,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _alertSent = false;
   bool _isRecordingClip = false;
   String? _lastClipPath;
+  int? _volumeListenerId;
+  bool _ignoreFirstVolumeEvent = true;
+  double? _lastVolumeValue;
+  final List<DateTime> _volumePressEvents = [];
+  static const Duration _volumePressWindow = Duration(seconds: 2);
 
   final VoiceTriggerService _voiceTriggerService = VoiceTriggerService();
   final EmergencyAudioService _emergencyAudioService = EmergencyAudioService();
@@ -68,6 +74,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pressAnim = Tween<double>(begin: 1.0, end: 0.92).animate(
       CurvedAnimation(parent: _pressController, curve: Curves.easeInOut),
     );
+
+    _initVolumeShortcut();
   }
 
   @override
@@ -75,8 +83,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pulseController1.dispose();
     _pulseController2.dispose();
     _pressController.dispose();
+    VolumeWatcher.removeListener(_volumeListenerId);
     _emergencyAudioService.dispose();
     super.dispose();
+  }
+
+  Future<void> _initVolumeShortcut() async {
+    try {
+      VolumeWatcher.hideVolumeView = true;
+      _lastVolumeValue = await VolumeWatcher.getCurrentVolume;
+      _volumeListenerId = VolumeWatcher.addListener(_onVolumeChanged);
+    } catch (_) {
+      // Si le plugin n'est pas dispo, l'app continue sans raccourci volume.
+    }
+  }
+
+  void _onVolumeChanged(dynamic value) {
+    if (!_isProtected || _alertSent || _isRecordingClip) return;
+
+    final volume = value is double ? value : double.tryParse('$value');
+    if (volume == null) return;
+
+    if (_ignoreFirstVolumeEvent) {
+      _ignoreFirstVolumeEvent = false;
+      _lastVolumeValue = volume;
+      return;
+    }
+
+    final previous = _lastVolumeValue;
+    _lastVolumeValue = volume;
+
+    if (previous != null && (volume - previous).abs() < 0.005) return;
+
+    final now = DateTime.now();
+    _volumePressEvents.removeWhere(
+      (event) => now.difference(event) > _volumePressWindow,
+    );
+    _volumePressEvents.add(now);
+
+    if (_volumePressEvents.length >= 3) {
+      _volumePressEvents.clear();
+      _triggerAlert();
+    }
   }
 
   void _onAlertPressed() async {

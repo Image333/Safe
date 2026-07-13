@@ -8,6 +8,7 @@ import '../../../core/services/app_reset_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/storage/camouflage_storage.dart';
 import '../../../core/theme/app_theme.dart';
+import 'audio_history_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -305,6 +306,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ]),
 
                 _buildSection('Sécurité', [
+                  _buildNavTile(
+                    icon: Icons.history,
+                    iconBg: AppColors.blueLight,
+                    iconColor: AppColors.blue,
+                    title: 'Historique audio',
+                    subtitle: 'Consulter vos enregistrements',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const AudioHistoryScreen()),
+                    ),
+                  ),
                   _buildNavTile(
                     icon: Icons.calculate_outlined,
                     iconBg: AppColors.blueLight,

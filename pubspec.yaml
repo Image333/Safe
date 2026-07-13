@@ -33,6 +33,8 @@ dependencies:
   # Enregistrement audio local
   record: ^6.0.0
   path_provider: ^2.1.5
+  volume_watcher: ^2.0.1
+  just_audio: ^0.9.0
 
   # Icônes
   flutter_svg: ^2.0.10+1
