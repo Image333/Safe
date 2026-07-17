@@ -198,6 +198,22 @@ func createAudio(db *sql.DB) fiber.Handler {
 
 		userID := getCurrentUserID(c)
 
+		// Parser le body en premier (avant les requêtes DB)
+		var req CreateAudioRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
+		}
+
+		// Validation
+		switch {
+		case req.BlobURL == "":
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "blob_url requis"})
+		case req.Duration <= 0:
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "duration doit être positif"})
+		case req.Format == "":
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "format requis"})
+		}
+
 		// Vérifier que l'alerte existe et appartient à l'utilisateur
 		var ownerID int
 		checkQuery := `SELECT user_id FROM alerts WHERE alert_id = ?`
@@ -224,22 +240,6 @@ func createAudio(db *sql.DB) fiber.Handler {
 		}
 		if existingCount > 0 {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Un enregistrement audio existe déjà pour cette alerte"})
-		}
-
-		// Parser le body
-		var req CreateAudioRequest
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
-		}
-
-		// Validation
-		switch {
-		case req.BlobURL == "":
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "blob_url requis"})
-		case req.Duration <= 0:
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "duration doit être positif"})
-		case req.Format == "":
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "format requis"})
 		}
 
 		// Insérer
