@@ -1,6 +1,8 @@
 # User documentation section
 
-key points :
+> **API Key required:** All endpoints require a valid `X-API-Key` header. See [Authentication](../api.md#authentication).
+
+Key points :
  - [Create Users](#create-user)
  - [Delete Users](#delete-user)
  - [Get Users](#get-user-by-email)

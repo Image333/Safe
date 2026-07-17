@@ -1,5 +1,7 @@
 # Audio documentation section
 
+> **API Key required:** All endpoints require a valid `X-API-Key` header. See [Authentication](../api.md#authentication).
+
 Key points :
  - [Create Audio Record](#create-audio-record)
  - [Get Audio by ID](#get-audio-by-id)
