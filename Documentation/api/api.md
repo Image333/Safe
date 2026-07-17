@@ -10,13 +10,17 @@ This prefix must be included before every endpoint path.
 
 ### Examples
 
-| Documented Endpoint     | Actual URL              |
-| ----------------------- | ----------------------- |
-| `POST /login`           | `/api/v1/login`         |
-| `POST /users`           | `/api/v1/users`         |
-| `GET /users/{email}`    | `/api/v1/users/{email}` |
-| `DELETE /users/{email}` | `/api/v1/users/{email}` |
-| `...`                     | `...`                    |
+| Documented Endpoint       | Actual URL                  |
+| ------------------------- | --------------------------- |
+| `POST /login`             | `/api/v1/login`             |
+| `POST /users`             | `/api/v1/users`             |
+| `GET /users/{email}`      | `/api/v1/users/{email}`     |
+| `DELETE /users/{email}`   | `/api/v1/users/{email}`     |
+| `POST /alerts/{id}/audio` | `/api/v1/alerts/{id}/audio` |
+| `GET /audio/{id}`         | `/api/v1/audio/{id}`        |
+| `GET /alerts/{id}/audio`  | `/api/v1/alerts/{id}/audio` |
+| `GET /me/audio`           | `/api/v1/me/audio`          |
+| `...`                     | `...`                       |
 
 ### Example Request
 
@@ -34,3 +38,4 @@ Content-Type: application/json
 
 # Documented enpoints
 - [Users](./endpoints/users.md)
+- [Audio](./endpoints/audio.md)
