@@ -6,6 +6,9 @@ import 'core/services/voice_trigger_service.dart';
 import 'core/storage/secret_pin_storage.dart';
 import 'core/theme/app_theme.dart';
 
+bool appHasSecret = false;
+bool appIsLocked = false;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -18,6 +21,8 @@ Future<void> main() async {
   if (hasSecret) {
     await AppCamouflageService().ensureCalculatorCamouflageApplied();
   }
+  appHasSecret = hasSecret;
+  appIsLocked = hasSecret; // Au démarrage, l'app est toujours verrouillée si elle a un PIN
   runApp(SafeApp(hasSecret: hasSecret));
 }
 

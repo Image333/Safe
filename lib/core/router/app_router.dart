@@ -6,6 +6,7 @@ import 'package:safeg/features/onboarding/screens/trigger_screen.dart';
 import 'package:safeg/features/onboarding/screens/pin_screen.dart';
 import 'package:safeg/features/onboarding/screens/home_screen.dart';
 import 'package:safeg/features/onboarding/screens/settings_screen.dart';
+import '../storage/secret_pin_storage.dart';
 
 class AppRouter {
   static const welcome  = '/';
@@ -25,8 +26,8 @@ class AppRouter {
       case trigger:          return _fade(const TriggerScreen());
       case pin:              return _fade(const PinScreen(mode: PinScreenMode.config));
       case unlock:           return _fade(const PinScreen(mode: PinScreenMode.unlock));
-      case home:             return _fade(const HomeScreen());
-      case AppRouter.settings: return _fade(const SettingsScreen());
+      case home:             return _fade(const _AppLockerWrapper(child: HomeScreen()));
+      case AppRouter.settings: return _fade(const _AppLockerWrapper(child: SettingsScreen()));
       default:               return _fade(const WelcomeScreen());
     }
   }
@@ -37,4 +38,59 @@ class AppRouter {
         FadeTransition(opacity: anim, child: child),
     transitionDuration: const Duration(milliseconds: 300),
   );
+}
+
+/// Widget wrapper qui verrouille automatiquement l'app si elle est en arrière-plan
+/// et force le retour à l'écran de déverrouillage.
+class _AppLockerWrapper extends StatefulWidget {
+  final Widget child;
+
+  const _AppLockerWrapper({required this.child});
+
+  @override
+  State<_AppLockerWrapper> createState() => _AppLockerWrapperState();
+}
+
+class _AppLockerWrapperState extends State<_AppLockerWrapper>
+    with WidgetsBindingObserver {
+  late AppLifecycleState _lastAppState;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _lastAppState = AppLifecycleState.paused;
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    if (state == AppLifecycleState.resumed && _lastAppState == AppLifecycleState.paused) {
+      // L'app revient de l'arrière-plan, on la verrouille si elle a un PIN
+      _lastAppState = state;
+      _lockApp();
+    } else {
+      _lastAppState = state;
+    }
+  }
+
+  void _lockApp() async {
+    final hasSecret = await SecretPinStorage().hasSecret();
+    if (hasSecret && mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        AppRouter.unlock,
+        (_) => false,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
