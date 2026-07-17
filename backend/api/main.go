@@ -68,6 +68,16 @@ func main() {
 
 	api := app.Group("/api/v1")
 
+	// API Key middleware — protège toutes les routes /api/v1
+	appKey := getEnv("API_KEY_APP", "")
+	devKey := getEnv("API_KEY_DEV", "")
+	if appKey != "" && devKey != "" {
+		api.Use(routes.ApiKeyMiddleware(appKey, devKey))
+		log.Println("API Key auth activée")
+	} else {
+		log.Println("API Key auth DÉSACTIVÉE (clés manquantes)")
+	}
+
 	routes.RegisterUserRoutes(api, db)
 	routes.RegisterAudioRoutes(api, db)
 
