@@ -36,12 +36,12 @@ type UserResponse struct {
 	ConfigID         *int   `json:"config_id"`
 }
 
-func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
+func RegisterUserRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler) {
 
 	//
 	// Login
 	//
-	router.Post("/login", func(c *fiber.Ctx) error {
+	router.Post("/login", keyMiddleware, func(c *fiber.Ctx) error {
 		var req LoginRequest
 
 		if err := c.BodyParser(&req); err != nil {
@@ -95,7 +95,7 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 	//
 	// Create User
 	//
-	router.Post("/users", func(c *fiber.Ctx) error {
+	router.Post("/users", keyMiddleware, func(c *fiber.Ctx) error {
 		var req CreateUserRequest
 
 		// Parse JSON from body Body
@@ -149,12 +149,12 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 
 	})
 
-	router.Use(ProtectedRoute())
+
 
 	//
 	// Delete User
 	//
-	router.Delete("/users/:email", func(c *fiber.Ctx) error {
+	router.Delete("/users/:email", keyMiddleware, ProtectedRoute(), func(c *fiber.Ctx) error {
 		emailParam := c.Params("email")
 		if emailParam == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -191,7 +191,7 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB) {
 	//
 	// Get user by email
 	//
-	router.Get("/users/:email", func(c *fiber.Ctx) error {
+	router.Get("/users/:email", keyMiddleware, ProtectedRoute(), func(c *fiber.Ctx) error {
 		// get email from params
 		emailParam := c.Params("email")
 		if emailParam == "" {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/ansrivas/fiberprometheus/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
@@ -64,6 +65,10 @@ func main() {
 	// Ensure api to not crash in case of panic
 	app.Use(recover.New())
 
+	prometheus := fiberprometheus.New("gpe-backend")
+	prometheus.RegisterAt(app, "/metrics")
+	app.Use(prometheus.Middleware)
+
 	routes.HealthRoutes(app)
 
 	api := app.Group("/api/v1")
@@ -71,15 +76,18 @@ func main() {
 	// API Key middleware — protège toutes les routes /api/v1
 	appKey := getEnv("API_KEY_APP", "")
 	devKey := getEnv("API_KEY_DEV", "")
+	var keyMiddleware fiber.Handler
 	if appKey != "" && devKey != "" {
-		api.Use(routes.ApiKeyMiddleware(appKey, devKey))
+		keyMiddleware = routes.ApiKeyMiddleware(appKey, devKey)
 		log.Println("API Key auth activée")
 	} else {
+		keyMiddleware = func(c *fiber.Ctx) error { return c.Next() }
 		log.Println("API Key auth DÉSACTIVÉE (clés manquantes)")
 	}
 
-	routes.RegisterUserRoutes(api, db)
-	routes.RegisterAudioRoutes(api, db)
+	routes.RegisterUserRoutes(api, db, keyMiddleware)
+	routes.RegisterAudioRoutes(api, db, keyMiddleware)
+
 
 	log.Println("Server starting on :8080...")
 	if err := app.Listen(":8080"); err != nil {
