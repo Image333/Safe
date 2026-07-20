@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/services/app_reset_service.dart';
+import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/storage/camouflage_storage.dart';
 import '../../../core/theme/app_theme.dart';
 
@@ -14,20 +18,30 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _camouflageStorage = CamouflageStorage();
   final _camouflageService = AppCamouflageService();
+  final _voiceTriggerService = VoiceTriggerService();
+  final _keywordController = TextEditingController();
+  static const int _voiceDurationStepSec = 5;
 
   // États des paramètres
   bool _camouflageEnabled = false;
   bool _vibrationConfirm  = true;
   bool _offlineMode       = true;
   String _selectedTrigger = 'volume';
+  bool _voiceTriggerArmed = false;
+  int _voiceRecordingDurationSec = VoiceTriggerService.defaultRecordingDurationSec;
   String _camouflageApp   = 'meteo';
-  bool _isLoggedIn        = false;
-  String _userEmail       = '';
 
   @override
   void initState() {
     super.initState();
     _loadCamouflageSettings();
+    _loadVoiceTriggerSettings();
+  }
+
+  @override
+  void dispose() {
+    _keywordController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCamouflageSettings() async {
@@ -47,6 +61,184 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       await _camouflageService.disableCalculatorCamouflage();
     }
+  }
+
+  Future<void> _loadVoiceTriggerSettings() async {
+    final config = await _voiceTriggerService.getConfig();
+    if (!mounted) return;
+
+    setState(() {
+      _voiceTriggerArmed = config.armed;
+      _voiceRecordingDurationSec = config.recordingDurationSec;
+      _keywordController.text = config.keyword ?? '';
+      if (_voiceTriggerArmed || (config.keyword != null && config.keyword!.isNotEmpty)) {
+        _selectedTrigger = 'keyword';
+      }
+    });
+  }
+
+  Future<void> _onVoiceTriggerArmedChanged(bool armed) async {
+    try {
+      final keyword = _keywordController.text.trim();
+      if (armed) {
+        if (keyword.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Renseignez un mot-clé avant d\'activer.')),
+          );
+          return;
+        }
+
+        final granted = await _confirmAndRequestMicrophonePermission();
+        if (!mounted || !granted) return;
+
+        await _persistVoiceConfig(keyword: keyword);
+        await _voiceTriggerService.arm();
+      } else {
+        await _voiceTriggerService.disarm();
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _voiceTriggerArmed = armed;
+        _selectedTrigger = armed ? 'keyword' : _selectedTrigger;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('StateError: ', ''))),
+      );
+    }
+  }
+
+  Future<void> _saveKeywordOnly() async {
+    final keyword = _keywordController.text.trim();
+    if (keyword.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Le mot-clé ne peut pas être vide.')),
+      );
+      return;
+    }
+
+    await _persistVoiceConfig(keyword: keyword);
+
+    if (Platform.isIOS) {
+      final granted = await _ensureMicrophonePermissionForIos();
+      if (!mounted) return;
+
+      if (!granted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Autorisez le micro pour utiliser le déclencheur vocal.'),
+            action: SnackBarAction(
+              label: 'Réglages',
+              onPressed: openAppSettings,
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Mot-clé enregistré.')),
+    );
+  }
+
+  Future<bool> _ensureMicrophonePermissionForIos() async {
+    var status = await Permission.microphone.status;
+    if (status.isGranted) return true;
+
+    status = await Permission.microphone.request();
+    return status.isGranted;
+  }
+
+  Future<bool> _confirmAndRequestMicrophonePermission() async {
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Autorisation micro'),
+        content: const Text(
+          'Pour activer le mot-clé vocal, Safe a besoin d\'accéder au microphone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Autoriser'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRequest != true || !mounted) return false;
+
+    final status = await Permission.microphone.request();
+    if (status.isGranted) return true;
+
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Autorisez le micro pour activer le mot-clé vocal.'),
+        action: SnackBarAction(
+          label: 'Réglages',
+          onPressed: openAppSettings,
+        ),
+      ),
+    );
+
+    return false;
+  }
+
+  Future<void> _persistVoiceConfig({String? keyword}) async {
+    final safeKeyword = (keyword ?? _keywordController.text).trim();
+    await _voiceTriggerService.saveConfig(
+      keyword: safeKeyword,
+      recordingDurationSec: _voiceRecordingDurationSec,
+    );
+
+    if (_voiceTriggerArmed) {
+      await _voiceTriggerService.disarm();
+      await _voiceTriggerService.arm();
+    }
+  }
+
+  Future<void> _setVoiceRecordingDuration(int seconds) async {
+    final clamped = (seconds / _voiceDurationStepSec).round() * _voiceDurationStepSec;
+    final bounded = clamped
+        .clamp(
+          VoiceTriggerService.minRecordingDurationSec,
+          VoiceTriggerService.maxRecordingDurationSec,
+        )
+        .toInt();
+
+    if (bounded == _voiceRecordingDurationSec) return;
+
+    setState(() => _voiceRecordingDurationSec = bounded);
+
+    final keyword = _keywordController.text.trim();
+    if (keyword.isEmpty) return;
+
+    try {
+      await _persistVoiceConfig(keyword: keyword);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Impossible de mettre à jour la durée.')),
+      );
+    }
+  }
+
+  String _formatDuration(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final minutes = seconds ~/ 60;
+    final remaining = seconds % 60;
+    if (remaining == 0) return '${minutes}min';
+    return '${minutes}min ${remaining}s';
   }
 
   @override
@@ -83,6 +275,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 _buildSection('Déclencheur', [
                   _buildTriggerSelector(),
+                  if (_selectedTrigger == 'keyword') _buildKeywordTriggerSettings(),
                 ]),
 
                 _buildSection('Camouflage', [
@@ -110,6 +303,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ]),
 
                 _buildSection('Sécurité', [
+                  _buildNavTile(
+                    icon: Icons.history,
+                    iconBg: AppColors.blueLight,
+                    iconColor: AppColors.blue,
+                    title: 'Historique audio',
+                    subtitle: 'Consulter vos enregistrements',
+                    onTap: () => Navigator.pushNamed(context, AppRouter.audioHistory),
+                  ),
                   _buildNavTile(
                     icon: Icons.calculate_outlined,
                     iconBg: AppColors.blueLight,
@@ -281,19 +482,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final options = [
       (value: 'volume',  icon: Icons.volume_down_outlined, label: '3× bouton volume'),
       (value: 'shake',   icon: Icons.vibration,            label: 'Secouer'),
+      (value: 'keyword', icon: Icons.mic_none_outlined,    label: 'Mot-clé vocal'),
     ];
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Mode de déclenchement', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.gray)),
         const SizedBox(height: 12),
-        Row(children: options.map((o) {
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: options.map((o) {
           final selected = _selectedTrigger == o.value;
-          return Expanded(child: GestureDetector(
+          return SizedBox(
+            width: (MediaQuery.of(context).size.width - 72) / 2,
+            child: GestureDetector(
             onTap: () => setState(() => _selectedTrigger = o.value),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              margin: EdgeInsets.only(right: o.value == 'volume' ? 8 : 0),
               padding: const EdgeInsets.symmetric(vertical: 12),
               decoration: BoxDecoration(
                 color: selected ? AppColors.blueLight : AppColors.grayLight,
@@ -306,9 +512,121 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(o.label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: selected ? AppColors.blue : AppColors.grayMid), textAlign: TextAlign.center),
               ]),
             ),
-          ));
-        }).toList()),
+            ),
+          );
+        }).toList(),
+        ),
       ]),
+    );
+  }
+
+  Widget _buildKeywordTriggerSettings() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.grayLight,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Déclencheur vocal (bêta)',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: AppColors.navy,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Fonctionne en arrière-plan. iOS nécessite le mode audio actif.',
+              style: TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _keywordController,
+              decoration: const InputDecoration(
+                labelText: 'Mot-clé',
+                hintText: 'Ex: j\'ai oublié mes clés',
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Durée du clip après détection',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.gray,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [15, 30, 60, 120].map((value) {
+                final selected = _voiceRecordingDurationSec == value;
+                return ChoiceChip(
+                  label: Text(_formatDuration(value)),
+                  selected: selected,
+                  onSelected: (_) => _setVoiceRecordingDuration(value),
+                  selectedColor: AppColors.blueLight,
+                  labelStyle: TextStyle(
+                    color: selected ? AppColors.blue : AppColors.grayMid,
+                    fontWeight: FontWeight.w600,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            Slider(
+              value: _voiceRecordingDurationSec.toDouble(),
+              min: VoiceTriggerService.minRecordingDurationSec.toDouble(),
+              max: VoiceTriggerService.maxRecordingDurationSec.toDouble(),
+              divisions: (VoiceTriggerService.maxRecordingDurationSec -
+                  VoiceTriggerService.minRecordingDurationSec) ~/
+                  _voiceDurationStepSec,
+              label: _formatDuration(_voiceRecordingDurationSec),
+              activeColor: AppColors.navy,
+              onChanged: (value) => _setVoiceRecordingDuration(value.round()),
+            ),
+            Text(
+              'Actuel: ${_formatDuration(_voiceRecordingDurationSec)} (max ${_formatDuration(VoiceTriggerService.maxRecordingDurationSec)})',
+              style: const TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saveKeywordOnly,
+                    child: const Text('Enregistrer le mot-clé'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Switch(
+                  value: _voiceTriggerArmed,
+                  onChanged: _onVoiceTriggerArmedChanged,
+                  activeColor: AppColors.navy,
+                ),
+              ],
+            ),
+            Text(
+              _voiceTriggerArmed
+                  ? 'Surveillance armée • clip ${_formatDuration(_voiceRecordingDurationSec)}'
+                  : 'Surveillance désactivée',
+              style: TextStyle(
+                fontSize: 12,
+                color: _voiceTriggerArmed ? AppColors.green : AppColors.grayMid,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -398,7 +716,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           ElevatedButton(
             onPressed: () {
-              setState(() { _isLoggedIn = false; _userEmail = ''; });
+              // TODO: Implémenter la déconnexion réelle
               Navigator.pop(context);
             },
             child: const Text('Se déconnecter'),

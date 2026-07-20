@@ -1,6 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/services/emergency_audio_service.dart';
+import '../../../core/services/voice_trigger_service.dart';
+import '../../../core/services/native_volume_trigger_service.dart';
+import '../../../core/services/audio_history_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -9,8 +14,16 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  bool _isProtected = true;
+  bool _isProtected = false;
   bool _alertSent = false;
+  bool _isRecordingClip = false;
+  String? _lastClipPath;
+  int _audioClipsCount = 0;
+
+  final VoiceTriggerService _voiceTriggerService = VoiceTriggerService();
+  final EmergencyAudioService _emergencyAudioService = EmergencyAudioService();
+  late final NativeVolumeTriggerService _nativeVolumeTriggerService;
+  final AudioHistoryService _audioHistoryService = AudioHistoryService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -22,15 +35,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _pressController;
   late Animation<double> _pressAnim;
 
-  // Contacts fictifs pour la démo — à remplacer par les vrais
-  final List<Map<String, String>> _contacts = [
-    {'name': 'Maman', 'phone': '06 12 34 56 78'},
-    {'name': 'Léa', 'phone': '07 98 76 54 32'},
-  ];
-
   @override
   void initState() {
     super.initState();
+
+    // Initialise le service natif de volume
+    _nativeVolumeTriggerService = NativeVolumeTriggerService(_emergencyAudioService);
 
     _pulseController1 = AnimationController(
       vsync: this,
@@ -61,6 +71,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pressAnim = Tween<double>(begin: 1.0, end: 0.92).animate(
       CurvedAnimation(parent: _pressController, curve: Curves.easeInOut),
     );
+
+    _loadAudioClipsCount();
   }
 
   @override
@@ -68,8 +80,71 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pulseController1.dispose();
     _pulseController2.dispose();
     _pressController.dispose();
+    _nativeVolumeTriggerService.dispose();
+    _emergencyAudioService.dispose();
     super.dispose();
   }
+
+  Future<void> _loadAudioClipsCount() async {
+    final count = await _audioHistoryService.getAudioClipsCount();
+    if (mounted) {
+      setState(() => _audioClipsCount = count);
+    }
+  }
+  Future<void> _toggleProtection(bool enabled) async {
+    setState(() => _isProtected = enabled);
+
+    if (enabled) {
+      try {
+        _nativeVolumeTriggerService.startListening(
+          onTriplePress: () {
+            // Appelé quand une triple pression est détectée
+            if (mounted) {
+              _triggerAlert();
+            }
+          },
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppColors.green,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              content: const Row(children: [
+                Icon(Icons.shield_outlined, color: AppColors.white),
+                SizedBox(width: 10),
+                Flexible(
+                  child: Text(
+                    'Protection activée - Appuyez 3× sur Volume +',
+                    style: TextStyle(color: AppColors.white, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ]),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isProtected = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppColors.red,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              content: Text(
+                'Erreur: $e',
+                style: const TextStyle(color: AppColors.white),
+              ),
+            ),
+          );
+        }
+      }
+    } else {
+      _nativeVolumeTriggerService.stopListening();
+    }
+  }
+
+
 
   void _onAlertPressed() async {
     // Animation pression
@@ -131,24 +206,84 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _triggerAlert() {
     setState(() => _alertSent = true);
-    // TODO : appel backend Go + enregistrement audio + GPS
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: AppColors.red,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        content: const Row(children: [
-          Icon(Icons.check_circle, color: AppColors.white),
-          SizedBox(width: 10),
-          Text('Alerte envoyée à vos contacts', style: TextStyle(color: AppColors.white, fontWeight: FontWeight.w600)),
-        ]),
-      ),
-    );
+    _recordEmergencyClip();
+
+    // TODO : appel backend Go + GPS + envoi aux contacts
+    // Note: Le message de confirmation sera affiché après l'enregistrement
 
     // Reset après 5 secondes
     Future.delayed(const Duration(seconds: 5), () {
       if (mounted) setState(() => _alertSent = false);
     });
+  }
+
+  Future<void> _recordEmergencyClip() async {
+    if (_isRecordingClip) return;
+
+    setState(() => _isRecordingClip = true);
+
+    try {
+      final config = await _voiceTriggerService.getConfig();
+      final durationSec = config.recordingDurationSec;
+
+      final path = await _emergencyAudioService.recordClip(
+        durationSec: durationSec,
+      );
+
+      if (!mounted) return;
+      setState(() => _lastClipPath = path);
+
+      // Recharger le compteur d'enregistrements
+      await _loadAudioClipsCount();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.navy,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Row(
+            children: [
+              const Icon(Icons.mic, color: AppColors.white),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Clip audio enregistré (${_formatDuration(durationSec)}).',
+                  style: const TextStyle(
+                    color: AppColors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.red,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Text(
+            'Échec enregistrement audio : $e',
+            style: const TextStyle(color: AppColors.white),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isRecordingClip = false);
+      }
+    }
+  }
+
+  String _formatDuration(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final minutes = seconds ~/ 60;
+    final remaining = seconds % 60;
+    if (remaining == 0) return '${minutes}min';
+    return '${minutes}min ${remaining}s';
   }
 
   @override
@@ -159,12 +294,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: Column(children: [
           _buildTopBar(),
           _buildStatusBanner(),
+          _buildTestButton(),
           const Spacer(),
           _buildPulseButton(),
           const SizedBox(height: 16),
           _buildAlertLabel(),
           const Spacer(),
-          _buildContactsSection(),
           const SizedBox(height: 32),
         ]),
       ),
@@ -184,6 +319,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         const SizedBox(width: 10),
         const Text('Safe', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.navy)),
         const Spacer(),
+        // Bouton historique audio
+        Stack(
+          children: [
+            IconButton(
+              onPressed: () async {
+                await Navigator.pushNamed(context, AppRouter.audioHistory);
+                _loadAudioClipsCount();
+              },
+              icon: const Icon(Icons.mic_none, color: AppColors.grayMid),
+              tooltip: 'Enregistrements',
+            ),
+            if (_audioClipsCount > 0)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(
+                    color: AppColors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: const BoxConstraints(
+                    minWidth: 16,
+                    minHeight: 16,
+                  ),
+                  child: Text(
+                    _audioClipsCount > 9 ? '9+' : '$_audioClipsCount',
+                    style: const TextStyle(
+                      color: AppColors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        ),
         // Bouton camouflage
         IconButton(
           onPressed: () {},
@@ -236,10 +409,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ])),
         Switch(
           value: _isProtected,
-          onChanged: (v) => setState(() => _isProtected = v),
+          onChanged: _toggleProtection,
           activeColor: AppColors.green,
         ),
       ]),
+    );
+  }
+
+  // ── Bouton de test (temporaire) ──────────────────────────────────────────
+  Widget _buildTestButton() {
+    if (!_isProtected) return const SizedBox.shrink();
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: ElevatedButton.icon(
+        onPressed: () {
+          if (kDebugMode) {
+            debugPrint('🧪 TEST: Simulation triple pression');
+          }
+          _triggerAlert();
+        },
+        icon: const Icon(Icons.bug_report, size: 18),
+        label: const Text('TEST: Simuler triple pression'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.orange,
+          foregroundColor: AppColors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+      ),
     );
   }
 
@@ -336,64 +533,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           'Ou appuyez 3× sur le bouton volume',
           style: TextStyle(fontSize: 13, color: AppColors.grayMid),
         ),
-      ]
+      ],
+      if (_isRecordingClip) ...[
+        const SizedBox(height: 10),
+        const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 8),
+            Text(
+              'Enregistrement audio en cours…',
+              style: TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+          ],
+        ),
+      ] else if (_lastClipPath != null) ...[
+        const SizedBox(height: 10),
+        const Text(
+          'Dernier clip audio enregistré localement.',
+          style: TextStyle(fontSize: 12, color: AppColors.grayMid),
+          textAlign: TextAlign.center,
+        ),
+      ],
     ]);
   }
 
-  // ── Section contacts ──────────────────────────────────────────────────────
-  Widget _buildContactsSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Text('Contacts de confiance', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.gray)),
-          const Spacer(),
-          GestureDetector(
-            onTap: () {}, // TODO : naviguer vers settings contacts
-            child: const Text('Modifier', style: TextStyle(fontSize: 13, color: AppColors.blue, fontWeight: FontWeight.w500)),
-          ),
-        ]),
-        const SizedBox(height: 12),
-        if (_contacts.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: AppColors.redLight, borderRadius: BorderRadius.circular(12)),
-            child: const Row(children: [
-              Icon(Icons.warning_amber_outlined, color: AppColors.red, size: 20),
-              SizedBox(width: 10),
-              Expanded(child: Text('Aucun contact configuré — l\'alerte ne sera pas envoyée.', style: TextStyle(fontSize: 13, color: AppColors.red))),
-            ]),
-          )
-        else
-          Row(
-            children: _contacts.map((c) => Expanded(
-              child: Container(
-                margin: EdgeInsets.only(right: c == _contacts.last ? 0 : 10),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: AppColors.blueLight,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.blue.withOpacity(0.2)),
-                ),
-                child: Row(children: [
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor: AppColors.navy,
-                    child: Text(
-                      c['name']![0].toUpperCase(),
-                      style: const TextStyle(color: AppColors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(c['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.navy), overflow: TextOverflow.ellipsis),
-                    Text(c['phone']!, style: const TextStyle(fontSize: 11, color: AppColors.grayMid), overflow: TextOverflow.ellipsis),
-                  ])),
-                ]),
-              ),
-            )).toList(),
-          ),
-      ]),
-    );
-  }
 }

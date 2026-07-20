@@ -6,12 +6,15 @@ PODS:
     - Flutter
   - permission_handler_apple (9.3.0):
     - Flutter
+  - volume_watcher (0.0.1):
+    - Flutter
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
   - flutter_dynamic_icon (from `.symlinks/plugins/flutter_dynamic_icon/ios`)
   - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+  - volume_watcher (from `.symlinks/plugins/volume_watcher/ios`)
 
 EXTERNAL SOURCES:
   Flutter:
@@ -22,13 +25,16 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/flutter_secure_storage/ios"
   permission_handler_apple:
     :path: ".symlinks/plugins/permission_handler_apple/ios"
+  volume_watcher:
+    :path: ".symlinks/plugins/volume_watcher/ios"
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_dynamic_icon: 9b73b8d673f589e913991cc025c007823c59ed19
   flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
   permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
+  volume_watcher: 5ab49044e0b934459111726de7a3a311152b7da5
 
-PODFILE CHECKSUM: 4ca6e9067a34892aec9ed12924660c786e7be576
+PODFILE CHECKSUM: f2def045a588266f18bd083359a8e1fff1177e1a
 
 COCOAPODS: 1.16.2

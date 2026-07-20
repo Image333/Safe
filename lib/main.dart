@@ -1,16 +1,35 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'core/router/app_router.dart';
 import 'core/services/app_camouflage_service.dart';
+import 'core/services/voice_trigger_service.dart';
 import 'core/storage/secret_pin_storage.dart';
 import 'core/theme/app_theme.dart';
 
+bool appHasSecret = false;
+bool appIsLocked = false;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Désactivé temporairement - cause des crashes au démarrage
+  // try {
+  //   await VoiceTriggerService().syncStateAtAppStart();
+  // } catch (e) {
+  //   debugPrint('Erreur VoiceTriggerService: $e');
+  // }
+
   final hasSecret = await SecretPinStorage().hasSecret();
   if (hasSecret) {
-    await AppCamouflageService().ensureCalculatorCamouflageApplied();
+    try {
+      await AppCamouflageService().ensureCalculatorCamouflageApplied();
+    } catch (e) {
+      debugPrint('Erreur AppCamouflageService: $e');
+    }
   }
+  appHasSecret = hasSecret;
+  appIsLocked = hasSecret; // Au démarrage, l'app est toujours verrouillée si elle a un PIN
   runApp(SafeApp(hasSecret: hasSecret));
 }
 

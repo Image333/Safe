@@ -223,7 +223,13 @@ class _PinScreenState extends State<PinScreen> {
       await _pinStorage.saveSecret(_secretNumber!);
       await _camouflageService.enableCalculatorCamouflage();
       if (!mounted) return;
-      _showSuccess();
+      final shouldOpenHome = await _showSuccess();
+      if (!mounted || shouldOpenHome != true) return;
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        AppRouter.home,
+        (_) => false,
+      );
     } else {
       setState(() {
         _error =
@@ -238,11 +244,11 @@ class _PinScreenState extends State<PinScreen> {
     }
   }
 
-  void _showSuccess() {
-    showDialog(
+  Future<bool?> _showSuccess() {
+    return showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => Dialog(
+      builder: (dialogContext) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -316,14 +322,7 @@ class _PinScreenState extends State<PinScreen> {
             ),
             const SizedBox(height: 28),
             ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                Navigator.pushNamedAndRemoveUntil(
-                  context,
-                  AppRouter.home,
-                  (_) => false,
-                );
-              },
+              onPressed: () => Navigator.of(dialogContext).pop(true),
               child: const Text('Accéder à Safe'),
             ),
           ]),
@@ -438,6 +437,7 @@ class _PinScreenState extends State<PinScreen> {
             const SizedBox(height: 8),
             Expanded(
               child: SafeCalculator(
+                fullscreen: true,
                 display: _display,
                 firstOperand: _firstOperand,
                 operatorSymbol: _operator,
@@ -459,62 +459,57 @@ class _PinScreenState extends State<PinScreen> {
   Widget _buildConfigScreen() {
     return Scaffold(
       body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: MediaQuery.of(context).size.height -
-                  MediaQuery.of(context).padding.top -
-                  MediaQuery.of(context).padding.bottom,
-            ),
-            child: IntrinsicHeight(
-              child: Column(children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 24),
-                      _buildProgress(4),
-                      const SizedBox(height: 28),
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 300),
-                        child: _confirming
-                            ? _buildConfirmHeader(
-                                key: const ValueKey('confirm'),
-                              )
-                            : _buildChooseHeader(
-                                key: const ValueKey('choose'),
-                              ),
-                      ),
-                    ],
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 24),
+                  _buildProgress(4),
+                  const SizedBox(height: 28),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child: _confirming
+                        ? _buildConfirmHeader(
+                            key: const ValueKey('confirm'),
+                          )
+                        : _buildChooseHeader(
+                            key: const ValueKey('choose'),
+                          ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                if (_confirming) ...[
-                  const CalculatorCamouflageHeader(),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: SafeCalculator(
-                      display: _display,
-                      firstOperand: _firstOperand,
-                      operatorSymbol: _operator,
-                      expression: _expression,
-                      error: _error,
-                      onDigit: _onDigit,
-                      onOperator: _onOperator,
-                      onClear: _onClear,
-                      onDelete: _onDelete,
-                      onEqual: _onEqual,
-                    ),
-                  ),
-                ]
-                else
-                  Expanded(child: _buildNumberPicker()),
-                const SizedBox(height: 24),
-              ]),
+                ],
+              ),
             ),
-          ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: _confirming
+                  ? Column(
+                      children: [
+                        const CalculatorCamouflageHeader(),
+                        const SizedBox(height: 8),
+                        Expanded(
+                          child: SafeCalculator(
+                            fullscreen: true,
+                            display: _display,
+                            firstOperand: _firstOperand,
+                            operatorSymbol: _operator,
+                            expression: _expression,
+                            error: _error,
+                            onDigit: _onDigit,
+                            onOperator: _onOperator,
+                            onClear: _onClear,
+                            onDelete: _onDelete,
+                            onEqual: _onEqual,
+                          ),
+                        ),
+                      ],
+                    )
+                  : _buildNumberPicker(),
+            ),
+            const SizedBox(height: 24),
+          ],
         ),
       ),
     );
