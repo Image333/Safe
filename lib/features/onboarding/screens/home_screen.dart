@@ -1,9 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/emergency_audio_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
-import '../../../core/services/volume_trigger_service.dart';
+import '../../../core/services/native_volume_trigger_service.dart';
 import '../../../core/services/audio_history_service.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -21,7 +22,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   final VoiceTriggerService _voiceTriggerService = VoiceTriggerService();
   final EmergencyAudioService _emergencyAudioService = EmergencyAudioService();
-  final VolumeTriggerService _volumeTriggerService = VolumeTriggerService();
+  late final NativeVolumeTriggerService _nativeVolumeTriggerService;
   final AudioHistoryService _audioHistoryService = AudioHistoryService();
 
   // Animations de pulsation
@@ -34,15 +35,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _pressController;
   late Animation<double> _pressAnim;
 
-  // Contacts fictifs pour la démo — à remplacer par les vrais
-  final List<Map<String, String>> _contacts = [
-    {'name': 'Maman', 'phone': '06 12 34 56 78'},
-    {'name': 'Léa', 'phone': '07 98 76 54 32'},
-  ];
-
   @override
   void initState() {
     super.initState();
+
+    // Initialise le service natif de volume
+    _nativeVolumeTriggerService = NativeVolumeTriggerService(_emergencyAudioService);
 
     _pulseController1 = AnimationController(
       vsync: this,
@@ -82,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pulseController1.dispose();
     _pulseController2.dispose();
     _pressController.dispose();
-    _volumeTriggerService.dispose();
+    _nativeVolumeTriggerService.dispose();
     _emergencyAudioService.dispose();
     super.dispose();
   }
@@ -98,8 +96,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     if (enabled) {
       try {
-        await _volumeTriggerService.startListening(
-          callback: () {
+        _nativeVolumeTriggerService.startListening(
+          onTriplePress: () {
             // Appelé quand une triple pression est détectée
             if (mounted) {
               _triggerAlert();
@@ -115,9 +113,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               content: const Row(children: [
                 Icon(Icons.shield_outlined, color: AppColors.white),
                 SizedBox(width: 10),
-                Text(
-                  'Protection activée - Appuyez 3× sur Volume +',
-                  style: TextStyle(color: AppColors.white, fontWeight: FontWeight.w600),
+                Flexible(
+                  child: Text(
+                    'Protection activée - Appuyez 3× sur Volume +',
+                    style: TextStyle(color: AppColors.white, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ]),
             ),
@@ -140,7 +140,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         }
       }
     } else {
-      await _volumeTriggerService.stopListening();
+      _nativeVolumeTriggerService.stopListening();
     }
   }
 
@@ -208,19 +208,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     setState(() => _alertSent = true);
     _recordEmergencyClip();
 
-    // TODO : appel backend Go + GPS
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: AppColors.red,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        content: const Row(children: [
-          Icon(Icons.check_circle, color: AppColors.white),
-          SizedBox(width: 10),
-          Text('Alerte envoyée à vos contacts', style: TextStyle(color: AppColors.white, fontWeight: FontWeight.w600)),
-        ]),
-      ),
-    );
+    // TODO : appel backend Go + GPS + envoi aux contacts
+    // Note: Le message de confirmation sera affiché après l'enregistrement
 
     // Reset après 5 secondes
     Future.delayed(const Duration(seconds: 5), () {
@@ -305,12 +294,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: Column(children: [
           _buildTopBar(),
           _buildStatusBanner(),
+          _buildTestButton(),
           const Spacer(),
           _buildPulseButton(),
           const SizedBox(height: 16),
           _buildAlertLabel(),
           const Spacer(),
-          _buildContactsSection(),
           const SizedBox(height: 32),
         ]),
       ),
@@ -424,6 +413,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           activeColor: AppColors.green,
         ),
       ]),
+    );
+  }
+
+  // ── Bouton de test (temporaire) ──────────────────────────────────────────
+  Widget _buildTestButton() {
+    if (!_isProtected) return const SizedBox.shrink();
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: ElevatedButton.icon(
+        onPressed: () {
+          if (kDebugMode) {
+            debugPrint('🧪 TEST: Simulation triple pression');
+          }
+          _triggerAlert();
+        },
+        icon: const Icon(Icons.bug_report, size: 18),
+        label: const Text('TEST: Simuler triple pression'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.orange,
+          foregroundColor: AppColors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+      ),
     );
   }
 
@@ -549,60 +562,4 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     ]);
   }
 
-  // ── Section contacts ──────────────────────────────────────────────────────
-  Widget _buildContactsSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Text('Contacts de confiance', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.gray)),
-          const Spacer(),
-          GestureDetector(
-            onTap: () {}, // TODO : naviguer vers settings contacts
-            child: const Text('Modifier', style: TextStyle(fontSize: 13, color: AppColors.blue, fontWeight: FontWeight.w500)),
-          ),
-        ]),
-        const SizedBox(height: 12),
-        if (_contacts.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: AppColors.redLight, borderRadius: BorderRadius.circular(12)),
-            child: const Row(children: [
-              Icon(Icons.warning_amber_outlined, color: AppColors.red, size: 20),
-              SizedBox(width: 10),
-              Expanded(child: Text('Aucun contact configuré — l\'alerte ne sera pas envoyée.', style: TextStyle(fontSize: 13, color: AppColors.red))),
-            ]),
-          )
-        else
-          Row(
-            children: _contacts.map((c) => Expanded(
-              child: Container(
-                margin: EdgeInsets.only(right: c == _contacts.last ? 0 : 10),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: AppColors.blueLight,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.blue.withOpacity(0.2)),
-                ),
-                child: Row(children: [
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor: AppColors.navy,
-                    child: Text(
-                      c['name']![0].toUpperCase(),
-                      style: const TextStyle(color: AppColors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(c['name']!, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.navy), overflow: TextOverflow.ellipsis),
-                    Text(c['phone']!, style: const TextStyle(fontSize: 11, color: AppColors.grayMid), overflow: TextOverflow.ellipsis),
-                  ])),
-                ]),
-              ),
-            )).toList(),
-          ),
-      ]),
-    );
-  }
 }

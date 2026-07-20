@@ -6,6 +6,7 @@ import 'package:safeg/features/onboarding/screens/trigger_screen.dart';
 import 'package:safeg/features/onboarding/screens/pin_screen.dart';
 import 'package:safeg/features/onboarding/screens/home_screen.dart';
 import 'package:safeg/features/onboarding/screens/settings_screen.dart';
+import 'package:safeg/features/audio/screens/audio_history_screen.dart';
 import '../storage/secret_pin_storage.dart';
 
 class AppRouter {
@@ -17,6 +18,7 @@ class AppRouter {
   static const unlock   = '/unlock';
   static const home     = '/home';
   static const settings = '/settings';
+  static const audioHistory = '/audio-history';
 
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -28,6 +30,7 @@ class AppRouter {
       case unlock:           return _fade(const PinScreen(mode: PinScreenMode.unlock));
       case home:             return _fade(const _AppLockerWrapper(child: HomeScreen()));
       case AppRouter.settings: return _fade(const _AppLockerWrapper(child: SettingsScreen()));
+      case AppRouter.audioHistory: return _fade(const _AppLockerWrapper(child: AudioHistoryScreen()));
       default:               return _fade(const WelcomeScreen());
     }
   }
