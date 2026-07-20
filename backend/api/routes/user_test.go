@@ -24,7 +24,8 @@ func setupTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 	}
 
 	// On attache directement les routes à notre fausse DB
-	RegisterUserRoutes(app, db)
+	noopMiddleware := func(c *fiber.Ctx) error { return c.Next() }
+	RegisterUserRoutes(app, db, noopMiddleware)
 
 	// Go fermera automatiquement la DB à la fin du test qui appelle ce helper
 	t.Cleanup(func() {

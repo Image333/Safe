@@ -28,14 +28,13 @@ type CreateAudioRequest struct {
 }
 
 // RegisterAudioRoutes enregistre tous les endpoints audio
-func RegisterAudioRoutes(router fiber.Router, db *sql.DB) {
-	// Tout le groupe est protégé par JWT
-	router.Use(ProtectedRoute())
+func RegisterAudioRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler) {
 
-	router.Get("/audio/:id", getAudioByID(db))
-	router.Get("/alerts/:alertId/audio", getAudioByAlert(db))
-	router.Get("/me/audio", getMyAudio(db))
-	router.Post("/alerts/:alertId/audio", createAudio(db))
+
+	router.Get("/audio/:id", keyMiddleware, ProtectedRoute(), getAudioByID(db))
+	router.Get("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), getAudioByAlert(db))
+	router.Get("/me/audio", keyMiddleware, ProtectedRoute(), getMyAudio(db))
+	router.Post("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), createAudio(db))
 }
 
 // GET /api/v1/audio/:id — Récupère un enregistrement audio par son ID

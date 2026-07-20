@@ -20,7 +20,8 @@ func setupAudioTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 		t.Fatalf("Erreur initialisation mock DB: %s", err)
 	}
 
-	RegisterAudioRoutes(app, db)
+	noopMiddleware := func(c *fiber.Ctx) error { return c.Next() }
+	RegisterAudioRoutes(app, db, noopMiddleware)
 
 	t.Cleanup(func() {
 		db.Close()
