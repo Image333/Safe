@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: gpe-api
-        image: etnauser/gpe-backend:0.1.5
+        image: etnauser/gpe-backend:0.1.6
         ports:
         - containerPort: 8080
         envFrom:
