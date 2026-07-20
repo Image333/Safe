@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:volume_watcher/volume_watcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/emergency_audio_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
+import '../../../core/services/volume_trigger_service.dart';
+import '../../../core/services/audio_history_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -12,18 +13,16 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  bool _isProtected = true;
+  bool _isProtected = false;
   bool _alertSent = false;
   bool _isRecordingClip = false;
   String? _lastClipPath;
-  int? _volumeListenerId;
-  bool _ignoreFirstVolumeEvent = true;
-  double? _lastVolumeValue;
-  final List<DateTime> _volumePressEvents = [];
-  static const Duration _volumePressWindow = Duration(seconds: 2);
+  int _audioClipsCount = 0;
 
   final VoiceTriggerService _voiceTriggerService = VoiceTriggerService();
   final EmergencyAudioService _emergencyAudioService = EmergencyAudioService();
+  final VolumeTriggerService _volumeTriggerService = VolumeTriggerService();
+  final AudioHistoryService _audioHistoryService = AudioHistoryService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -75,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       CurvedAnimation(parent: _pressController, curve: Curves.easeInOut),
     );
 
-    _initVolumeShortcut();
+    _loadAudioClipsCount();
   }
 
   @override
@@ -83,49 +82,69 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pulseController1.dispose();
     _pulseController2.dispose();
     _pressController.dispose();
-    VolumeWatcher.removeListener(_volumeListenerId);
+    _volumeTriggerService.dispose();
     _emergencyAudioService.dispose();
     super.dispose();
   }
 
-  Future<void> _initVolumeShortcut() async {
-    try {
-      VolumeWatcher.hideVolumeView = true;
-      _lastVolumeValue = await VolumeWatcher.getCurrentVolume;
-      _volumeListenerId = VolumeWatcher.addListener(_onVolumeChanged);
-    } catch (_) {
-      // Si le plugin n'est pas dispo, l'app continue sans raccourci volume.
+  Future<void> _loadAudioClipsCount() async {
+    final count = await _audioHistoryService.getAudioClipsCount();
+    if (mounted) {
+      setState(() => _audioClipsCount = count);
+    }
+  }
+  Future<void> _toggleProtection(bool enabled) async {
+    setState(() => _isProtected = enabled);
+
+    if (enabled) {
+      try {
+        await _volumeTriggerService.startListening(
+          callback: () {
+            // Appelé quand une triple pression est détectée
+            if (mounted) {
+              _triggerAlert();
+            }
+          },
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppColors.green,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              content: const Row(children: [
+                Icon(Icons.shield_outlined, color: AppColors.white),
+                SizedBox(width: 10),
+                Text(
+                  'Protection activée - Appuyez 3× sur Volume +',
+                  style: TextStyle(color: AppColors.white, fontWeight: FontWeight.w600),
+                ),
+              ]),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isProtected = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppColors.red,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              content: Text(
+                'Erreur: $e',
+                style: const TextStyle(color: AppColors.white),
+              ),
+            ),
+          );
+        }
+      }
+    } else {
+      await _volumeTriggerService.stopListening();
     }
   }
 
-  void _onVolumeChanged(dynamic value) {
-    if (!_isProtected || _alertSent || _isRecordingClip) return;
 
-    final volume = value is double ? value : double.tryParse('$value');
-    if (volume == null) return;
-
-    if (_ignoreFirstVolumeEvent) {
-      _ignoreFirstVolumeEvent = false;
-      _lastVolumeValue = volume;
-      return;
-    }
-
-    final previous = _lastVolumeValue;
-    _lastVolumeValue = volume;
-
-    if (previous != null && (volume - previous).abs() < 0.005) return;
-
-    final now = DateTime.now();
-    _volumePressEvents.removeWhere(
-      (event) => now.difference(event) > _volumePressWindow,
-    );
-    _volumePressEvents.add(now);
-
-    if (_volumePressEvents.length >= 3) {
-      _volumePressEvents.clear();
-      _triggerAlert();
-    }
-  }
 
   void _onAlertPressed() async {
     // Animation pression
@@ -225,6 +244,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (!mounted) return;
       setState(() => _lastClipPath = path);
 
+      // Recharger le compteur d'enregistrements
+      await _loadAudioClipsCount();
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: AppColors.navy,
@@ -308,6 +330,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         const SizedBox(width: 10),
         const Text('Safe', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.navy)),
         const Spacer(),
+        // Bouton historique audio
+        Stack(
+          children: [
+            IconButton(
+              onPressed: () async {
+                await Navigator.pushNamed(context, AppRouter.audioHistory);
+                _loadAudioClipsCount();
+              },
+              icon: const Icon(Icons.mic_none, color: AppColors.grayMid),
+              tooltip: 'Enregistrements',
+            ),
+            if (_audioClipsCount > 0)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(
+                    color: AppColors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: const BoxConstraints(
+                    minWidth: 16,
+                    minHeight: 16,
+                  ),
+                  child: Text(
+                    _audioClipsCount > 9 ? '9+' : '$_audioClipsCount',
+                    style: const TextStyle(
+                      color: AppColors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        ),
         // Bouton camouflage
         IconButton(
           onPressed: () {},
@@ -360,7 +420,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ])),
         Switch(
           value: _isProtected,
-          onChanged: (v) => setState(() => _isProtected = v),
+          onChanged: _toggleProtection,
           activeColor: AppColors.green,
         ),
       ]),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'core/router/app_router.dart';
@@ -11,15 +12,21 @@ bool appIsLocked = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await VoiceTriggerService().syncStateAtAppStart();
-  } catch (_) {
-    // Le bridge natif sera branché progressivement.
-  }
+  
+  // Désactivé temporairement - cause des crashes au démarrage
+  // try {
+  //   await VoiceTriggerService().syncStateAtAppStart();
+  // } catch (e) {
+  //   debugPrint('Erreur VoiceTriggerService: $e');
+  // }
 
   final hasSecret = await SecretPinStorage().hasSecret();
   if (hasSecret) {
-    await AppCamouflageService().ensureCalculatorCamouflageApplied();
+    try {
+      await AppCamouflageService().ensureCalculatorCamouflageApplied();
+    } catch (e) {
+      debugPrint('Erreur AppCamouflageService: $e');
+    }
   }
   appHasSecret = hasSecret;
   appIsLocked = hasSecret; // Au démarrage, l'app est toujours verrouillée si elle a un PIN
