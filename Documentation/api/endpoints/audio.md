@@ -265,6 +265,8 @@ Or:
 
 ## Example Request
 
+### HTTP
+
 ```http
 POST /api/v1/alerts/3/audio
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI...
@@ -275,6 +277,22 @@ Content-Type: application/json
   "duration": 45,
   "format": "mp3"
 }
+```
+
+> **Note:** `alertId` (`3` in the example above) is a **URL parameter**, not a body field. It identifies the alert to attach the audio record to.
+
+### cURL
+
+```bash
+curl -X POST http://<host>:<port>/api/v1/alerts/3/audio \
+  -H "X-API-Key: <api_key>" \
+  -H "Authorization: Bearer <jwt_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "blob_url": "http://minio-service:9000/audio-bucket/test-recording.mp3",
+    "duration": 45,
+    "format": "mp3"
+  }'
 ```
 
 ## Example Response
