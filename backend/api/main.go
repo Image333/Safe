@@ -67,6 +67,7 @@ func main() {
 
 	prometheus := fiberprometheus.New("gpe-backend")
 	prometheus.RegisterAt(app, "/metrics")
+	prometheus.SetSkipPaths([]string{"/health"})
 	app.Use(prometheus.Middleware)
 
 	routes.HealthRoutes(app)
