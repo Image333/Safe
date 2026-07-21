@@ -1,14 +1,19 @@
 package com.safe.safe
 
 import android.content.Intent
+import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 	private val voiceTriggerChannel = "safe/voice_trigger"
+	private val volumeButtonChannel = "safe/volume_button"
 	private val minRecordingDurationSec = 5
 	private val maxRecordingDurationSec = 600
+
+	private var volumeEventSink: EventChannel.EventSink? = null
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
@@ -48,5 +53,33 @@ class MainActivity : FlutterActivity() {
 					else -> result.notImplemented()
 				}
 			}
+
+		EventChannel(flutterEngine.dartExecutor.binaryMessenger, volumeButtonChannel)
+			.setStreamHandler(object : EventChannel.StreamHandler {
+				override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+					volumeEventSink = events
+				}
+
+				override fun onCancel(arguments: Any?) {
+					volumeEventSink = null
+				}
+			})
+	}
+
+	override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+		val sink = volumeEventSink
+		if (sink != null) {
+			when (keyCode) {
+				KeyEvent.KEYCODE_VOLUME_UP -> {
+					sink.success("up")
+					return true
+				}
+				KeyEvent.KEYCODE_VOLUME_DOWN -> {
+					sink.success("down")
+					return true
+				}
+			}
+		}
+		return super.onKeyDown(keyCode, event)
 	}
 }
