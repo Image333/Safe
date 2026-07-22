@@ -32,6 +32,54 @@ class CreateUserResponse {
   }
 }
 
+/// Métadonnées audio renvoyées par l'API
+class RemoteAudioRecord {
+  final int audioId;
+  final String blobUrl;
+  final int duration;
+  final String format;
+  final int alertId;
+  final String? alertTimestamp;
+  final String? alertStatus;
+
+  RemoteAudioRecord({
+    required this.audioId,
+    required this.blobUrl,
+    required this.duration,
+    required this.format,
+    required this.alertId,
+    this.alertTimestamp,
+    this.alertStatus,
+  });
+
+  factory RemoteAudioRecord.fromJson(Map<String, dynamic> json) {
+    return RemoteAudioRecord(
+      audioId: _asInt(json['audio_id']) ?? 0,
+      blobUrl: ApiConfig.toPublicBlobUrl(_asString(json['blob_url']) ?? ''),
+      duration: _asInt(json['duration']) ?? 0,
+      format: _asString(json['format']) ?? 'm4a',
+      alertId: _asInt(json['alert_id']) ?? 0,
+      alertTimestamp: _asString(json['alert_timestamp']),
+      alertStatus: _asString(json['alert_status']),
+    );
+  }
+}
+
+/// Réponse de création d'enregistrement audio
+class CreateAudioResponse {
+  final String message;
+  final int audioId;
+
+  CreateAudioResponse({required this.message, required this.audioId});
+
+  factory CreateAudioResponse.fromJson(Map<String, dynamic> json) {
+    return CreateAudioResponse(
+      message: _asString(json['message']) ?? 'Enregistrement audio créé',
+      audioId: _asInt(json['audio_id']) ?? 0,
+    );
+  }
+}
+
 /// Exception personnalisée pour les erreurs API
 class ApiException implements Exception {
   final String message;
@@ -81,8 +129,7 @@ class ApiService {
         'X-API-Key': ApiConfig.apiKeyApp,
       };
 
-  /// Headers avec authentification
-  // ignore: unused_element
+  /// Headers avec authentification JWT
   Map<String, String> _headersWithAuth(String token) => {
         ..._headers,
         'Authorization': 'Bearer $token',
@@ -156,6 +203,73 @@ class ApiService {
         return result;
       }
 
+      throw ApiException(
+        _extractErrorMessage(json ?? {}, _defaultErrorForStatus(response.statusCode)),
+        response.statusCode,
+      );
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('Erreur de connexion: ${e.toString()}');
+    }
+  }
+
+  /// Attache un enregistrement audio à une alerte
+  ///
+  /// Endpoint: POST /alerts/:alertId/audio
+  Future<CreateAudioResponse> createAudio({
+    required String token,
+    required int alertId,
+    required String blobUrl,
+    required int duration,
+    required String format,
+  }) async {
+    try {
+      final response = await _client.post(
+        Uri.parse('$_baseUrl/alerts/$alertId/audio'),
+        headers: _headersWithAuth(token),
+        body: jsonEncode({
+          'blob_url': blobUrl,
+          'duration': duration,
+          'format': format,
+        }),
+      );
+
+      final json = _tryDecodeMap(response.body);
+
+      if (response.statusCode == 201) {
+        return CreateAudioResponse.fromJson(json ?? {});
+      }
+
+      throw ApiException(
+        _extractErrorMessage(json ?? {}, _defaultErrorForStatus(response.statusCode)),
+        response.statusCode,
+      );
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('Erreur de connexion: ${e.toString()}');
+    }
+  }
+
+  /// Liste les enregistrements audio de l'utilisateur connecté
+  ///
+  /// Endpoint: GET /me/audio
+  Future<List<RemoteAudioRecord>> getMyAudio({required String token}) async {
+    try {
+      final response = await _client.get(
+        Uri.parse('$_baseUrl/me/audio'),
+        headers: _headersWithAuth(token),
+      );
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is! List) return [];
+        return decoded
+            .whereType<Map>()
+            .map((e) => RemoteAudioRecord.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+
+      final json = _tryDecodeMap(response.body);
       throw ApiException(
         _extractErrorMessage(json ?? {}, _defaultErrorForStatus(response.statusCode)),
         response.statusCode,

@@ -10,3 +10,5 @@ export 'voice_trigger_service.dart';
 export 'volume_trigger_service.dart';
 export 'emergency_audio_service.dart';
 export 'audio_history_service.dart';
+export 'minio_upload_service.dart';
+export 'audio_sync_service.dart';

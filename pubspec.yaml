@@ -27,6 +27,9 @@ dependencies:
   # HTTP client
   http: ^1.2.0
 
+  # Stockage objet S3 / MinIO
+  minio: ^3.5.7
+
   # Permissions (micro, caméra, GPS)
   permission_handler: ^11.3.1
 
@@ -50,6 +53,8 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.4
 
 flutter:
+  config:
+    enable-swift-package-manager: false
   uses-material-design: true
   assets:
     - assets/images/

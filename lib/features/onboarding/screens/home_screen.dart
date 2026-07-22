@@ -7,6 +7,7 @@ import '../../../core/services/emergency_audio_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/services/native_volume_trigger_service.dart';
 import '../../../core/services/audio_history_service.dart';
+import '../../../core/services/audio_sync_service.dart';
 import '../../settings/auth_bottom_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -28,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final EmergencyAudioService _emergencyAudioService = EmergencyAudioService();
   late final NativeVolumeTriggerService _nativeVolumeTriggerService;
   final AudioHistoryService _audioHistoryService = AudioHistoryService();
+  final AudioSyncService _audioSyncService = AudioSyncService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -250,21 +252,40 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (!mounted) return;
       setState(() => _lastClipPath = path);
 
-      // Recharger le compteur d'enregistrements
+      // Sync remote si compte connecté (sinon reste local)
+      final syncResult = await _audioSyncService.syncEmergencyClip(
+        localFilePath: path,
+        durationSec: durationSec,
+      );
+
+      if (!mounted) return;
+
       await _loadAudioClipsCount();
+      if (!mounted) return;
+
+      final message = syncResult.uploaded
+          ? 'Clip synchronisé (${_formatDuration(durationSec)}).'
+          : syncResult.errorMessage != null
+              ? 'Clip conservé en local (${_formatDuration(durationSec)}). Sync: ${syncResult.errorMessage}'
+              : 'Clip audio enregistré (${_formatDuration(durationSec)}).';
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: AppColors.navy,
+          backgroundColor: syncResult.uploaded
+              ? AppColors.green
+              : (syncResult.errorMessage != null ? AppColors.orange : AppColors.navy),
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           content: Row(
             children: [
-              const Icon(Icons.mic, color: AppColors.white),
+              Icon(
+                syncResult.uploaded ? Icons.cloud_done_outlined : Icons.mic,
+                color: AppColors.white,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Clip audio enregistré (${_formatDuration(durationSec)}).',
+                  message,
                   style: const TextStyle(
                     color: AppColors.white,
                     fontWeight: FontWeight.w600,

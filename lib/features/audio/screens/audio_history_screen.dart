@@ -17,7 +17,7 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen> {
   
   List<AudioClip> _audioClips = [];
   bool _isLoading = true;
-  String? _playingClipPath;
+  String? _playingClipId;
   bool _isPlaying = false;
 
   @override
@@ -30,7 +30,7 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen> {
       setState(() {
         _isPlaying = state.playing;
         if (state.processingState == ProcessingState.completed) {
-          _playingClipPath = null;
+          _playingClipId = null;
         }
       });
     });
@@ -54,21 +54,39 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen> {
   }
 
   Future<void> _playAudio(AudioClip clip) async {
-    if (_playingClipPath == clip.filePath && _isPlaying) {
-      // Pause si on clique sur le clip en cours de lecture
+    if (_playingClipId == clip.id && _isPlaying) {
       await _audioPlayer.pause();
-    } else {
-      // Jouer le nouveau clip
-      await _audioPlayer.stop();
-      await _audioPlayer.setFilePath(clip.filePath);
-      await _audioPlayer.play();
-      setState(() {
-        _playingClipPath = clip.filePath;
-      });
+      return;
     }
+
+    await _audioPlayer.stop();
+    final source = clip.playSource;
+    if (source.isEmpty) return;
+
+    if (clip.isRemote) {
+      await _audioPlayer.setUrl(source);
+    } else {
+      await _audioPlayer.setFilePath(source);
+    }
+    await _audioPlayer.play();
+    setState(() {
+      _playingClipId = clip.id;
+    });
   }
 
   Future<void> _deleteClip(AudioClip clip) async {
+    if (clip.isRemote) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Suppression cloud non disponible pour le moment'),
+            backgroundColor: AppColors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -91,14 +109,14 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen> {
     );
 
     if (confirmed == true) {
-      if (_playingClipPath == clip.filePath) {
+      if (_playingClipId == clip.id) {
         await _audioPlayer.stop();
-        setState(() => _playingClipPath = null);
+        setState(() => _playingClipId = null);
       }
-      
+
       await clip.delete();
       await _loadAudioClips();
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -113,12 +131,25 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen> {
   Future<void> _deleteAllClips() async {
     if (_audioClips.isEmpty) return;
 
+    final hasRemoteOnly = _audioClips.every((c) => c.isRemote);
+    if (hasRemoteOnly) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Suppression cloud non disponible pour le moment'),
+            backgroundColor: AppColors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Tout supprimer'),
         content: Text(
-          'Voulez-vous vraiment supprimer tous les ${_audioClips.length} enregistrements ? Cette action est irréversible.',
+          'Voulez-vous vraiment supprimer tous les ${_audioClips.length} enregistrements locaux ? Cette action est irréversible.',
         ),
         actions: [
           TextButton(
@@ -136,15 +167,15 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen> {
 
     if (confirmed == true) {
       await _audioPlayer.stop();
-      setState(() => _playingClipPath = null);
-      
+      setState(() => _playingClipId = null);
+
       await _historyService.deleteAllClips();
       await _loadAudioClips();
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Tous les enregistrements ont été supprimés'),
+            content: Text('Tous les enregistrements locaux ont été supprimés'),
             backgroundColor: AppColors.green,
           ),
         );
@@ -239,7 +270,7 @@ class _AudioHistoryScreenState extends State<AudioHistoryScreen> {
       separatorBuilder: (context, index) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final clip = _audioClips[index];
-        final isPlaying = _playingClipPath == clip.filePath && _isPlaying;
+        final isPlaying = _playingClipId == clip.id && _isPlaying;
         
         return _AudioClipCard(
           clip: clip,
@@ -350,18 +381,36 @@ class _AudioClipCard extends StatelessWidget {
                               fontWeight: FontWeight.w500,
                             ),
                           ),
+                          if (clip.isRemote) ...[
+                            const SizedBox(width: 12),
+                            const Icon(
+                              Icons.cloud_outlined,
+                              size: 16,
+                              color: AppColors.blue,
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              'Cloud',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.blue,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ],
                   ),
                 ),
                 
-                // Bouton supprimer
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  color: AppColors.red,
-                  onPressed: onDelete,
-                ),
+                // Bouton supprimer (local uniquement)
+                if (!clip.isRemote)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    color: AppColors.red,
+                    onPressed: onDelete,
+                  ),
               ],
             ),
           ),
