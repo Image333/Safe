@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/api_config.dart';
 
 /// Modèle pour la réponse de login
 class LoginResponse {
@@ -10,8 +11,8 @@ class LoginResponse {
 
   factory LoginResponse.fromJson(Map<String, dynamic> json) {
     return LoginResponse(
-      message: json['message'] as String,
-      token: json['token'] as String,
+      message: _asString(json['message']) ?? 'Connexion réussie',
+      token: _asString(json['token']) ?? '',
     );
   }
 }
@@ -25,8 +26,8 @@ class CreateUserResponse {
 
   factory CreateUserResponse.fromJson(Map<String, dynamic> json) {
     return CreateUserResponse(
-      message: json['message'] as String,
-      userId: json['user_id'] as int,
+      message: _asString(json['message']) ?? 'Utilisateur créé',
+      userId: _asInt(json['user_id']) ?? 0,
     );
   }
 }
@@ -42,13 +43,34 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+String? _asString(dynamic value) {
+  if (value == null) return null;
+  if (value is String) return value;
+  if (value is Map) {
+    return _asString(value['message']) ??
+        _asString(value['error']) ??
+        value.toString();
+  }
+  return value.toString();
+}
+
+int? _asInt(dynamic value) {
+  if (value == null) return null;
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value.toString());
+}
+
+String _extractErrorMessage(Map<String, dynamic> json, [String fallback = 'Requête invalide']) {
+  return _asString(json['error']) ??
+      _asString(json['message']) ??
+      fallback;
+}
+
 /// Service de communication avec l'API backend
 class ApiService {
-  // URL de base de l'API - À adapter selon votre environnement
-  // En développement local : http://localhost:8080
-  // En production : https://votre-api.com
-  static const String _baseUrl = 'http://localhost:8080/api/v1';
-  
+  static String get _baseUrl => ApiConfig.baseUrl;
+
   final http.Client _client;
 
   ApiService({http.Client? client}) : _client = client ?? http.Client();
@@ -56,6 +78,7 @@ class ApiService {
   /// Headers par défaut pour les requêtes
   Map<String, String> get _headers => {
         'Content-Type': 'application/json; charset=UTF-8',
+        'X-API-Key': ApiConfig.apiKeyApp,
       };
 
   /// Headers avec authentification
@@ -66,16 +89,8 @@ class ApiService {
       };
 
   /// Login - Authentification d'un utilisateur
-  /// 
+  ///
   /// Endpoint: POST /login
-  /// 
-  /// Paramètres:
-  /// - [email]: Adresse email de l'utilisateur
-  /// - [password]: Mot de passe de l'utilisateur
-  /// 
-  /// Retourne un [LoginResponse] contenant le token JWT
-  /// 
-  /// Lève une [ApiException] en cas d'erreur
   Future<LoginResponse> login({
     required String email,
     required String password,
@@ -90,23 +105,20 @@ class ApiService {
         }),
       );
 
+      final json = _tryDecodeMap(response.body);
+
       if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        return LoginResponse.fromJson(json);
-      } else if (response.statusCode == 401) {
-        throw ApiException('Identifiants invalides', response.statusCode);
-      } else if (response.statusCode == 400) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        throw ApiException(
-          json['error'] as String? ?? 'Requête invalide',
-          response.statusCode,
-        );
-      } else {
-        throw ApiException(
-          'Erreur serveur (${response.statusCode})',
-          response.statusCode,
-        );
+        final result = LoginResponse.fromJson(json ?? {});
+        if (result.token.isEmpty) {
+          throw ApiException('Token manquant dans la réponse', response.statusCode);
+        }
+        return result;
       }
+
+      throw ApiException(
+        _extractErrorMessage(json ?? {}, _defaultErrorForStatus(response.statusCode)),
+        response.statusCode,
+      );
     } catch (e) {
       if (e is ApiException) rethrow;
       throw ApiException('Erreur de connexion: ${e.toString()}');
@@ -114,18 +126,8 @@ class ApiService {
   }
 
   /// Création d'un nouveau compte utilisateur
-  /// 
+  ///
   /// Endpoint: POST /users
-  /// 
-  /// Paramètres:
-  /// - [email]: Adresse email de l'utilisateur
-  /// - [password]: Mot de passe de l'utilisateur
-  /// - [firstname]: Prénom de l'utilisateur
-  /// - [name]: Nom de l'utilisateur
-  /// 
-  /// Retourne un [CreateUserResponse] contenant l'ID du nouvel utilisateur
-  /// 
-  /// Lève une [ApiException] en cas d'erreur
   Future<CreateUserResponse> createUser({
     required String email,
     required String password,
@@ -144,24 +146,52 @@ class ApiService {
         }),
       );
 
+      final json = _tryDecodeMap(response.body);
+
       if (response.statusCode == 201) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        return CreateUserResponse.fromJson(json);
-      } else if (response.statusCode == 400) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        throw ApiException(
-          json['error'] as String? ?? 'Requête invalide',
-          response.statusCode,
-        );
-      } else {
-        throw ApiException(
-          'Erreur serveur (${response.statusCode})',
-          response.statusCode,
-        );
+        final result = CreateUserResponse.fromJson(json ?? {});
+        if (result.userId == 0) {
+          throw ApiException('ID utilisateur manquant dans la réponse', response.statusCode);
+        }
+        return result;
       }
+
+      throw ApiException(
+        _extractErrorMessage(json ?? {}, _defaultErrorForStatus(response.statusCode)),
+        response.statusCode,
+      );
     } catch (e) {
       if (e is ApiException) rethrow;
       throw ApiException('Erreur de connexion: ${e.toString()}');
+    }
+  }
+
+  Map<String, dynamic>? _tryDecodeMap(String body) {
+    if (body.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _defaultErrorForStatus(int statusCode) {
+    switch (statusCode) {
+      case 400:
+        return 'Requête invalide';
+      case 401:
+        return 'Non autorisé';
+      case 403:
+        return 'Accès refusé';
+      case 404:
+        return 'Ressource introuvable';
+      case 409:
+        return 'Conflit (email déjà utilisé ?)';
+      default:
+        return 'Erreur serveur ($statusCode)';
     }
   }
 

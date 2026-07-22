@@ -2,10 +2,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/services/auth_service.dart';
 import '../../../core/services/emergency_audio_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/services/native_volume_trigger_service.dart';
 import '../../../core/services/audio_history_service.dart';
+import '../../settings/auth_bottom_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,6 +21,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isRecordingClip = false;
   String? _lastClipPath;
   int _audioClipsCount = 0;
+  bool _isAuthenticated = true; // masqué par défaut le temps du check
+  bool _accountBannerDismissed = false;
 
   final VoiceTriggerService _voiceTriggerService = VoiceTriggerService();
   final EmergencyAudioService _emergencyAudioService = EmergencyAudioService();
@@ -73,6 +77,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
 
     _loadAudioClipsCount();
+    _checkAuthStatus();
+  }
+
+  Future<void> _checkAuthStatus() async {
+    final loggedIn = await AuthService().isAuthenticated();
+    if (mounted) {
+      setState(() => _isAuthenticated = loggedIn);
+    }
+  }
+
+  Future<void> _openCreateAccount() async {
+    await AuthBottomSheet.show(context, initialMode: AuthMode.register);
+    await _checkAuthStatus();
   }
 
   @override
@@ -300,7 +317,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           const SizedBox(height: 16),
           _buildAlertLabel(),
           const Spacer(),
-          const SizedBox(height: 32),
+          if (!_isAuthenticated && !_accountBannerDismissed)
+            _buildAccountBanner()
+          else
+            const SizedBox(height: 32),
         ]),
       ),
     );
@@ -365,7 +385,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ),
         // Paramètres
         IconButton(
-          onPressed: () => Navigator.pushNamed(context, AppRouter.settings),
+          onPressed: () async {
+            await Navigator.pushNamed(context, AppRouter.settings);
+            _checkAuthStatus();
+          },
           icon: const Icon(Icons.settings_outlined, color: AppColors.grayMid),
         ),
       ]),
@@ -509,6 +532,87 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: color.withOpacity((1 - value) * 0.15),
+      ),
+    );
+  }
+
+  // ── Bannière création de compte ───────────────────────────────────────────
+  Widget _buildAccountBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+      decoration: BoxDecoration(
+        color: AppColors.blueLight,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.blue.withOpacity(0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.shield_outlined, color: AppColors.navy, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Créez votre compte',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.navy,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Pour une meilleure expérience et mieux protéger vos données.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.navy.withOpacity(0.75),
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 36,
+                  child: ElevatedButton(
+                    onPressed: _openCreateAccount,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.navy,
+                      foregroundColor: AppColors.white,
+                      minimumSize: Size.zero,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      textStyle: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    child: const Text('Créer mon compte'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: () => setState(() => _accountBannerDismissed = true),
+            icon: const Icon(Icons.close, size: 18, color: AppColors.grayMid),
+            tooltip: 'Fermer',
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            padding: EdgeInsets.zero,
+          ),
+        ],
       ),
     );
   }
