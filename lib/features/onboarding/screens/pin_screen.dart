@@ -417,25 +417,18 @@ class _PinScreenState extends State<PinScreen> {
       );
     }
 
-    return Scaffold(
-      backgroundColor: AppColors.white,
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            CalculatorCamouflageHeader(
-              onLongPress: kDebugMode ? _debugResetApp : null,
-            ),
-            if (kDebugMode)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20),
-                child: Text(
-                  'Debug : appui long sur « Calculatrice » pour réinitialiser',
-                  style: TextStyle(fontSize: 11, color: AppColors.grayMid),
-                ),
-              ),
-            const SizedBox(height: 8),
-            Expanded(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: const Color(0xFF000000),
+      ),
+      child: Scaffold(
+        backgroundColor: const Color(0xFF000000),
+        body: GestureDetector(
+          onLongPress: kDebugMode ? _debugResetApp : null,
+          behavior: HitTestBehavior.translucent,
+          child: SafeArea(
+            child: SizedBox.expand(
               child: SafeCalculator(
                 fullscreen: true,
                 display: _display,
@@ -450,7 +443,7 @@ class _PinScreenState extends State<PinScreen> {
                 onEqual: _onEqual,
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
