@@ -64,5 +64,5 @@ flutter_launcher_icons:
   android: true
   ios: false
   image_path: assets/icons/calculator_app_icon.png
-  adaptive_icon_background: "#3A3A3C"
+  adaptive_icon_background: "#1C1C1E"
   adaptive_icon_foreground: assets/icons/calculator_app_icon.png
