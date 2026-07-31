@@ -78,9 +78,12 @@
 	<string>Safe a besoin d'accéder à vos contacts pour vous permettre de choisir vos contacts de confiance.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Safe utilise le micro pour détecter votre mot-clé de sécurité et lancer un enregistrement d'urgence.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Safe utilise la reconnaissance vocale pour détecter votre mot-clé de sécurité, même lorsque l'écran est verrouillé.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>processing</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
