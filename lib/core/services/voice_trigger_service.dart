@@ -1,7 +1,12 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../storage/voice_trigger_storage.dart';
+import 'speech_recognition_service.dart';
+import 'background_keep_alive_service.dart';
 
 enum VoiceTriggerState {
   stopped,
@@ -9,43 +14,86 @@ enum VoiceTriggerState {
   recording,
 }
 
+class VoiceTriggerSchedule {
+  final bool enabled;
+  final int startHour;
+  final int startMinute;
+  final int endHour;
+  final int endMinute;
+  final List<int> days; // 0 = Dimanche, 1 = Lundi, ..., 6 = Samedi
+
+  const VoiceTriggerSchedule({
+    required this.enabled,
+    required this.startHour,
+    required this.startMinute,
+    required this.endHour,
+    required this.endMinute,
+    required this.days,
+  });
+
+  String get formattedStartTime => '${startHour.toString().padLeft(2, '0')}:${startMinute.toString().padLeft(2, '0')}';
+  String get formattedEndTime => '${endHour.toString().padLeft(2, '0')}:${endMinute.toString().padLeft(2, '0')}';
+}
+
 class VoiceTriggerConfig {
   final bool armed;
   final String? keyword;
   final int recordingDurationSec;
+  final VoiceTriggerSchedule? schedule;
 
   const VoiceTriggerConfig({
     required this.armed,
     required this.keyword,
     required this.recordingDurationSec,
+    this.schedule,
   });
 }
 
 class VoiceTriggerService {
-  static const MethodChannel _channel =
-      MethodChannel('safe/voice_trigger');
+  static const MethodChannel _channel = MethodChannel('safe/voice_trigger');
 
   static const int defaultRecordingDurationSec =
-    VoiceTriggerStorage.defaultRecordingDurationSec;
+      VoiceTriggerStorage.defaultRecordingDurationSec;
   static const int minRecordingDurationSec =
-    VoiceTriggerStorage.minRecordingDurationSec;
+      VoiceTriggerStorage.minRecordingDurationSec;
   static const int maxRecordingDurationSec =
-    VoiceTriggerStorage.maxRecordingDurationSec;
+      VoiceTriggerStorage.maxRecordingDurationSec;
 
   final VoiceTriggerStorage _storage;
+  final SpeechRecognitionService _speechService;
 
   VoiceTriggerService({VoiceTriggerStorage? storage})
-      : _storage = storage ?? VoiceTriggerStorage();
+      : _storage = storage ?? VoiceTriggerStorage(),
+        _speechService = SpeechRecognitionService();
+
+  /// Accès au service de reconnaissance vocale
+  SpeechRecognitionService get speechService => _speechService;
 
   Future<VoiceTriggerConfig> getConfig() async {
     final armed = await _storage.isArmed();
     final keyword = await _storage.getKeyword();
     final recordingDurationSec = await _storage.getRecordingDurationSec();
 
+    // Charger la configuration de plage horaire
+    final scheduleEnabled = await _storage.isScheduleEnabled();
+    final startHour = await _storage.getScheduleStartHour();
+    final startMinute = await _storage.getScheduleStartMinute();
+    final endHour = await _storage.getScheduleEndHour();
+    final endMinute = await _storage.getScheduleEndMinute();
+    final days = await _storage.getScheduleDays();
+
     return VoiceTriggerConfig(
       armed: armed,
       keyword: keyword,
       recordingDurationSec: recordingDurationSec,
+      schedule: VoiceTriggerSchedule(
+        enabled: scheduleEnabled,
+        startHour: startHour,
+        startMinute: startMinute,
+        endHour: endHour,
+        endMinute: endMinute,
+        days: days,
+      ),
     );
   }
 
@@ -59,6 +107,24 @@ class VoiceTriggerService {
 
     await _storage.setKeyword(keyword);
     await _storage.setRecordingDurationSec(safeDuration);
+  }
+
+  Future<void> saveSchedule({
+    required bool enabled,
+    required int startHour,
+    required int startMinute,
+    required int endHour,
+    required int endMinute,
+    required List<int> days,
+  }) async {
+    await _storage.setScheduleEnabled(enabled);
+    await _storage.setScheduleStartTime(startHour, startMinute);
+    await _storage.setScheduleEndTime(endHour, endMinute);
+    await _storage.setScheduleDays(days);
+  }
+
+  Future<bool> isCurrentTimeInSchedule() async {
+    return await _storage.isCurrentTimeInSchedule();
   }
 
   Future<void> arm() async {
@@ -76,15 +142,61 @@ class VoiceTriggerService {
 
     await _storage.setArmed(true);
 
-    await _channel.invokeMethod<void>('startListening', {
-      'keyword': keyword,
-      'recordingDurationSec': recordingDurationSec,
-    });
+    if (Platform.isAndroid) {
+      await _startAndroidForegroundService(keyword, recordingDurationSec);
+    } else {
+      await _startIosListening(keyword, recordingDurationSec);
+    }
+
+    debugPrint('🎤 VoiceTrigger: Écoute activée pour "$keyword"');
+  }
+
+  Future<void> _startAndroidForegroundService(
+      String keyword, int recordingDurationSec) async {
+    try {
+      await _channel.invokeMethod('startListening', {
+        'keyword': keyword,
+        'recordingDurationSec': recordingDurationSec,
+      });
+      debugPrint('🎤 Android Foreground Service démarré');
+    } catch (e) {
+      debugPrint('❌ Erreur Android Foreground Service: $e');
+      // Fallback sur speech_to_text Flutter
+      await _startIosListening(keyword, recordingDurationSec);
+    }
+  }
+
+  Future<void> _startIosListening(
+      String keyword, int recordingDurationSec) async {
+    debugPrint('🎤 iOS: Configuration du speech service...');
+
+    // Configurer la reconnaissance vocale
+    _speechService.configure(
+      keyword: keyword,
+      recordingDurationSec: recordingDurationSec,
+    );
+
+    debugPrint('🎤 iOS: Démarrage de l\'écoute...');
+    await _speechService.startListening();
+    debugPrint('🎤 iOS: speech_to_text activé');
   }
 
   Future<void> disarm() async {
     await _storage.setArmed(false);
-    await _channel.invokeMethod<void>('stopListening');
+
+    if (Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('stopListening');
+      } catch (e) {
+        debugPrint('❌ Erreur arrêt Android service: $e');
+      }
+    }
+
+    // Arrêter dans tous les cas
+    await _speechService.stopListening();
+    await BackgroundKeepAliveService.instance.stop();
+
+    debugPrint('🎤 VoiceTrigger: Désarmé');
   }
 
   Future<void> syncStateAtAppStart() async {
@@ -105,9 +217,44 @@ class VoiceTriggerService {
       return;
     }
 
-    await _channel.invokeMethod<void>('startListening', {
-      'keyword': keyword,
-      'recordingDurationSec': recordingDurationSec,
-    });
+    // Réarmer selon la plateforme
+    if (Platform.isAndroid) {
+      await _startAndroidForegroundService(keyword, recordingDurationSec);
+    } else {
+      await _startIosListening(keyword, recordingDurationSec);
+    }
+
+    debugPrint('🎤 VoiceTrigger: Réarmé au démarrage');
+  }
+
+  /// Initialise le service de reconnaissance vocale
+  Future<bool> initializeSpeechRecognition() async {
+    return await _speechService.initialize();
+  }
+
+  /// Vérifie si la reconnaissance vocale est initialisée
+  bool get isSpeechReady => _speechService.isInitialized;
+
+  /// Demande la permission de reconnaissance vocale (iOS)
+  Future<bool> requestSpeechPermission() async {
+    try {
+      final result =
+          await _channel.invokeMethod<bool>('requestSpeechPermission');
+      return result ?? false;
+    } catch (e) {
+      // Fallback: initialiser speech_to_text (demande la permission)
+      return await _speechService.initialize();
+    }
+  }
+
+  /// Vérifie si la permission de reconnaissance vocale est accordée (iOS)
+  Future<bool> checkSpeechPermission() async {
+    try {
+      final result =
+          await _channel.invokeMethod<bool>('checkSpeechPermission');
+      return result ?? false;
+    } catch (e) {
+      return _speechService.isInitialized;
+    }
   }
 }
