@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 
 import '../storage/voice_trigger_storage.dart';
+import 'emergency_audio_service.dart';
 
 /// Service de reconnaissance vocale utilisant speech_to_text
 /// Utilise les APIs natives Apple/Google
@@ -80,9 +82,9 @@ class SpeechRecognitionService {
     if (status == 'done' || status == 'notListening') {
       _isListening = false;
       
-      // Redémarrer l'écoute si on doit continuer
+      // Redémarrer l'écoute si on doit continuer (avec délai pour éviter spam)
       if (_shouldBeListening) {
-        _scheduleRestart();
+        _scheduleRestart(delay: const Duration(seconds: 1));
       }
     }
   }
@@ -91,15 +93,29 @@ class SpeechRecognitionService {
     debugPrint('❌ SpeechRecognition error: $error');
     _isListening = false;
     
+    // Analyser l'erreur pour ajuster le délai de redémarrage
+    String errorMsg = error.toString().toLowerCase();
+    Duration restartDelay = const Duration(seconds: 1);
+    
+    if (errorMsg.contains('error_retry') || errorMsg.contains('error_no_match')) {
+      // Erreur normale - pas de parole détectée, redémarrer rapidement
+      restartDelay = const Duration(milliseconds: 500);
+      debugPrint('🔄 Redémarrage rapide (pas de parole détectée)');
+    } else if (errorMsg.contains('error_audio') || errorMsg.contains('error_network')) {
+      // Erreur plus sérieuse - attendre plus longtemps
+      restartDelay = const Duration(seconds: 3);
+      debugPrint('⏳ Redémarrage retardé (erreur audio/réseau)');
+    }
+    
     // Redémarrer après une erreur si on doit continuer
     if (_shouldBeListening) {
-      _scheduleRestart();
+      _scheduleRestart(delay: restartDelay);
     }
   }
 
-  void _scheduleRestart() {
+  void _scheduleRestart({Duration delay = const Duration(milliseconds: 500)}) {
     _restartTimer?.cancel();
-    _restartTimer = Timer(const Duration(milliseconds: 500), () async {
+    _restartTimer = Timer(delay, () async {
       if (_shouldBeListening && !_isListening) {
         final inSchedule = await _storage.isCurrentTimeInSchedule();
         if (inSchedule) {
@@ -161,18 +177,22 @@ class SpeechRecognitionService {
       
       _isListening = true;
       
-      // Trouver la meilleure locale française disponible
-      String localeToUse = 'fr_FR';
+      // Trouver la meilleure locale française disponible (préférer fr-FR)
+      String localeToUse = 'fr-FR';
       try {
         final locales = await _speech.locales();
         final frLocales = locales.where((l) => l.localeId.startsWith('fr')).toList();
         if (frLocales.isNotEmpty) {
-          localeToUse = frLocales.first.localeId;
+          // Préférer fr-FR si disponible
+          final frFR = frLocales.where((l) => l.localeId == 'fr-FR' || l.localeId == 'fr_FR').toList();
+          if (frFR.isNotEmpty) {
+            localeToUse = frFR.first.localeId;
+          } else {
+            localeToUse = frLocales.first.localeId;
+          }
           debugPrint('🌍 Utilisation de la locale: $localeToUse');
         } else {
           debugPrint('⚠️ Pas de locale FR, utilisation par défaut');
-          // Utiliser la locale système
-          localeToUse = locales.isNotEmpty ? locales.first.localeId : 'fr_FR';
         }
       } catch (e) {
         debugPrint('⚠️ Erreur récupération locales: $e');
@@ -180,11 +200,17 @@ class SpeechRecognitionService {
       
       await _speech.listen(
         onResult: _onResult,
-        listenFor: const Duration(seconds: 30), // Écoute par blocs de 30s
-        pauseFor: const Duration(seconds: 5), // Pause de 5s avant arrêt
+        listenFor: const Duration(seconds: 60), // Écoute plus longue
+        pauseFor: const Duration(seconds: 10), // Plus de tolérance au silence
         partialResults: true,
         localeId: localeToUse,
         listenMode: ListenMode.dictation,
+        onSoundLevelChange: (level) {
+          // Optionnel: afficher le niveau sonore pour debug
+          if (level > 0) {
+            debugPrint('🔊 Niveau sonore: ${level.toStringAsFixed(1)}');
+          }
+        },
       );
       
       debugPrint('✅ SpeechRecognition: Écoute démarrée pour "$_keyword"');
@@ -192,9 +218,9 @@ class SpeechRecognitionService {
       _isListening = false;
       debugPrint('❌ SpeechRecognition: Erreur démarrage: $e');
       
-      // Réessayer
+      // Réessayer après un délai plus long
       if (_shouldBeListening) {
-        _scheduleRestart();
+        _scheduleRestart(delay: const Duration(seconds: 2));
       }
     }
   }
@@ -235,11 +261,49 @@ class SpeechRecognitionService {
   }
 
   void _onKeywordDetected() {
-    debugPrint('🚨 Mot-clé "$_keyword" détecté!');
+    debugPrint('🚨🚨🚨 MOT-CLÉ "$_keyword" DÉTECTÉ! 🚨🚨🚨');
     onKeywordDetected?.call();
     
-    // TODO: Déclencher l'enregistrement d'urgence
-    // Intégrer avec EmergencyAudioService
+    // Vibration haptique pour confirmer
+    HapticFeedback.heavyImpact();
+    
+    // Déclencher l'enregistrement d'urgence
+    _startEmergencyRecording();
+  }
+
+  Future<void> _startEmergencyRecording() async {
+    debugPrint('🔴 Démarrage enregistrement d\'urgence ($_recordingDurationSec secondes)...');
+    onRecordingStarted?.call();
+    
+    try {
+      // Arrêter temporairement l'écoute pour éviter les conflits audio
+      await _speech.stop();
+      _isListening = false;
+      
+      // Enregistrer
+      final audioService = EmergencyAudioService();
+      final filePath = await audioService.recordClip(durationSec: _recordingDurationSec);
+      
+      debugPrint('✅ Enregistrement terminé: $filePath');
+      onRecordingFinished?.call(filePath);
+      
+      await audioService.dispose();
+      
+      // Reprendre l'écoute après l'enregistrement
+      if (_shouldBeListening) {
+        debugPrint('🎤 Reprise de l\'écoute...');
+        await Future.delayed(const Duration(seconds: 1));
+        await _startRecognition();
+      }
+    } catch (e) {
+      debugPrint('❌ Erreur enregistrement d\'urgence: $e');
+      onError?.call('Erreur enregistrement: $e');
+      
+      // Reprendre l'écoute même en cas d'erreur
+      if (_shouldBeListening) {
+        _scheduleRestart(delay: const Duration(seconds: 2));
+      }
+    }
   }
 
   /// Arrête l'écoute
