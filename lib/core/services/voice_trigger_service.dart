@@ -142,10 +142,15 @@ class VoiceTriggerService {
 
     await _storage.setArmed(true);
 
+    // Démarrer le service de maintien en arrière-plan pour iOS
+    if (Platform.isIOS) {
+      await BackgroundKeepAliveService.instance.start();
+    }
+
     if (Platform.isAndroid) {
       await _startAndroidForegroundService(keyword, recordingDurationSec);
     } else {
-      await _startIosListening(keyword, recordingDurationSec);
+      await _startIosNativeListening(keyword, recordingDurationSec);
     }
 
     debugPrint('🎤 VoiceTrigger: Écoute activée pour "$keyword"');
@@ -166,6 +171,59 @@ class VoiceTriggerService {
     }
   }
 
+  Future<void> _startIosNativeListening(
+      String keyword, int recordingDurationSec) async {
+    debugPrint('🎤 iOS: Démarrage écoute native...');
+
+    // Charger la configuration de plage horaire
+    final scheduleEnabled = await _storage.isScheduleEnabled();
+    final startHour = await _storage.getScheduleStartHour();
+    final startMinute = await _storage.getScheduleStartMinute();
+    final endHour = await _storage.getScheduleEndHour();
+    final endMinute = await _storage.getScheduleEndMinute();
+    final days = await _storage.getScheduleDays();
+
+    try {
+      // Utiliser le canal natif iOS avec timeout pour éviter le blocage
+      await _channel.invokeMethod('startListening', {
+        'keyword': keyword,
+        'recordingDurationSec': recordingDurationSec,
+        'schedule': {
+          'enabled': scheduleEnabled,
+          'startHour': startHour,
+          'startMinute': startMinute,
+          'endHour': endHour,
+          'endMinute': endMinute,
+          'days': days,
+        },
+      }).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint('⚠️ iOS: Timeout écoute native, utilisation du fallback');
+          return null;
+        },
+      );
+      debugPrint('🎤 iOS: Écoute native démarrée via VoiceTriggerManager');
+    } catch (e) {
+      debugPrint('❌ iOS: Erreur écoute native: $e');
+      // Fallback sur speech_to_text Flutter (moins fiable en background)
+      await _startFlutterSpeechListening(keyword, recordingDurationSec);
+    }
+  }
+
+  /// Démarre l'écoute via le plugin Flutter speech_to_text
+  Future<void> _startFlutterSpeechListening(
+      String keyword, int recordingDurationSec) async {
+    debugPrint('🎤 Fallback: Démarrage speech_to_text Flutter...');
+    _speechService.configure(
+      keyword: keyword,
+      recordingDurationSec: recordingDurationSec,
+    );
+    await _speechService.startListening();
+    debugPrint('🎤 Fallback: speech_to_text Flutter activé');
+  }
+
+  // Garder l'ancienne méthode pour compatibilité/fallback
   Future<void> _startIosListening(
       String keyword, int recordingDurationSec) async {
     debugPrint('🎤 iOS: Configuration du speech service...');
@@ -200,31 +258,44 @@ class VoiceTriggerService {
   }
 
   Future<void> syncStateAtAppStart() async {
-    final armed = await _storage.isArmed();
-    if (!armed) return;
+    try {
+      final armed = await _storage.isArmed();
+      if (!armed) return;
 
-    final keyword = await _storage.getKeyword();
-    final recordingDurationSec = await _storage.getRecordingDurationSec();
+      final keyword = await _storage.getKeyword();
+      final recordingDurationSec = await _storage.getRecordingDurationSec();
 
-    if (keyword == null || keyword.trim().isEmpty) {
-      await _storage.setArmed(false);
-      return;
+      if (keyword == null || keyword.trim().isEmpty) {
+        await _storage.setArmed(false);
+        return;
+      }
+
+      final micStatus = await Permission.microphone.status;
+      if (!micStatus.isGranted) {
+        await _storage.setArmed(false);
+        return;
+      }
+
+      // Réarmer selon la plateforme (avec gestion d'erreur)
+      if (Platform.isIOS) {
+        try {
+          await BackgroundKeepAliveService.instance.start();
+        } catch (e) {
+          debugPrint('⚠️ BackgroundKeepAlive start error: $e');
+        }
+      }
+      
+      if (Platform.isAndroid) {
+        await _startAndroidForegroundService(keyword, recordingDurationSec);
+      } else {
+        await _startIosNativeListening(keyword, recordingDurationSec);
+      }
+
+      debugPrint('🎤 VoiceTrigger: Réarmé au démarrage');
+    } catch (e) {
+      debugPrint('❌ syncStateAtAppStart error: $e');
+      // Ne pas propager l'erreur pour éviter de bloquer l'app
     }
-
-    final micStatus = await Permission.microphone.status;
-    if (!micStatus.isGranted) {
-      await _storage.setArmed(false);
-      return;
-    }
-
-    // Réarmer selon la plateforme
-    if (Platform.isAndroid) {
-      await _startAndroidForegroundService(keyword, recordingDurationSec);
-    } else {
-      await _startIosListening(keyword, recordingDurationSec);
-    }
-
-    debugPrint('🎤 VoiceTrigger: Réarmé au démarrage');
   }
 
   /// Initialise le service de reconnaissance vocale
