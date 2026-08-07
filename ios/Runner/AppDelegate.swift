@@ -91,19 +91,23 @@ import Speech
             let keyword = payload["keyword"] as? String ?? ""
             let recordingDurationSec = payload["recordingDurationSec"] as? Int ?? 15
             
+            print("📱 iOS startListening: keyword='\(keyword)', duration=\(recordingDurationSec)s")
+            
             // Parser la configuration de plage horaire
             var scheduleConfig: ScheduleConfig? = nil
-            if let scheduleData = payload["schedule"] as? [String: Any],
-               let enabled = scheduleData["enabled"] as? Bool,
-               enabled {
-              scheduleConfig = ScheduleConfig(
-                enabled: true,
-                startHour: scheduleData["startHour"] as? Int ?? 22,
-                startMinute: scheduleData["startMinute"] as? Int ?? 0,
-                endHour: scheduleData["endHour"] as? Int ?? 7,
-                endMinute: scheduleData["endMinute"] as? Int ?? 0,
-                days: scheduleData["days"] as? [Int] ?? [0, 1, 2, 3, 4, 5, 6]
-              )
+            if let scheduleData = payload["schedule"] as? [String: Any] {
+              let enabled = scheduleData["enabled"] as? Bool ?? false
+              print("📱 iOS schedule: enabled=\(enabled)")
+              if enabled {
+                scheduleConfig = ScheduleConfig(
+                  enabled: true,
+                  startHour: scheduleData["startHour"] as? Int ?? 22,
+                  startMinute: scheduleData["startMinute"] as? Int ?? 0,
+                  endHour: scheduleData["endHour"] as? Int ?? 7,
+                  endMinute: scheduleData["endMinute"] as? Int ?? 0,
+                  days: scheduleData["days"] as? [Int] ?? [0, 1, 2, 3, 4, 5, 6]
+                )
+              }
             }
             
             manager.configure(
@@ -111,11 +115,14 @@ import Speech
               recordingDurationSec: recordingDurationSec,
               schedule: scheduleConfig
             )
+            print("📱 iOS: VoiceTriggerManager configuré")
           }
           
           try manager.startListening()
+          print("📱 iOS: startListening() réussi")
           callback(nil)
         } catch {
+          print("📱 iOS: startListening() ERREUR: \(error)")
           callback(FlutterError(code: "start_failed", message: error.localizedDescription, details: nil))
         }
         

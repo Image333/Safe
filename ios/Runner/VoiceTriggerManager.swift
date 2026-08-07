@@ -276,11 +276,14 @@ final class VoiceTriggerManager: NSObject {
         guard let result = result else { return }
         
         let transcription = result.bestTranscription.formattedString.lowercased()
-        print("🎤 Transcription: \(transcription)")
+        print("🎤 Transcription: '\(transcription)' | Mot-clé recherché: '\(keyword)' | isFinal: \(result.isFinal)")
         
-        // Vérifier si le mot-clé est détecté
-        if transcription.contains(keyword) {
-            print("🚨 VoiceTrigger: Mot-clé '\(keyword)' détecté!")
+        // Vérifier si le mot-clé est détecté (comparaison flexible)
+        let keywordLower = keyword.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let transcriptionLower = transcription.lowercased()
+        
+        if transcriptionLower.contains(keywordLower) {
+            print("🚨 VoiceTrigger: Mot-clé '\(keyword)' DÉTECTÉ dans '\(transcription)'!")
             triggerRecording()
         }
         
