@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../../core/router/app_router.dart';
@@ -30,6 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _voiceTriggerArmed = false;
   int _voiceRecordingDurationSec = VoiceTriggerService.defaultRecordingDurationSec;
   String _camouflageApp   = 'meteo';
+  bool _isRefreshingVoice = false;
 
   // Configuration de la plage horaire
   bool _scheduleEnabled = false;
@@ -834,37 +836,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           // Bouton de test
-          IconButton(
-            onPressed: _testSpeechRecognition,
-            icon: const Icon(Icons.refresh, size: 20),
-            color: AppColors.navy,
-            tooltip: 'Relancer l\'écoute',
-          ),
+          _isRefreshingVoice
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : IconButton(
+                  onPressed: _testSpeechRecognition,
+                  icon: const Icon(Icons.refresh, size: 20),
+                  color: AppColors.navy,
+                  tooltip: 'Relancer l\'écoute',
+                ),
         ],
       ),
     );
   }
 
   Future<void> _testSpeechRecognition() async {
+    if (_isRefreshingVoice) return;
+    
+    setState(() => _isRefreshingVoice = true);
+    
     try {
       // Désarmer puis réarmer pour forcer le redémarrage
       if (_voiceTriggerArmed) {
+        debugPrint('🔄 Refresh: Désarmement...');
         await _voiceTriggerService.disarm();
-        await Future.delayed(const Duration(milliseconds: 500));
+        await Future.delayed(const Duration(milliseconds: 300));
+        
+        debugPrint('🔄 Refresh: Réarmement...');
         await _voiceTriggerService.arm();
         
-        setState(() {}); // Rafraîchir l'UI
+        debugPrint('🔄 Refresh: Terminé!');
         
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('🎤 Écoute relancée - Parlez pour tester'),
+              content: Text('🎤 Écoute relancée - Dites votre mot-clé pour tester'),
+              backgroundColor: AppColors.green,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        // Si pas armé, on arme directement
+        debugPrint('🔄 Refresh: Armement initial...');
+        await _voiceTriggerService.arm();
+        setState(() => _voiceTriggerArmed = true);
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('🎤 Écoute activée - Dites votre mot-clé'),
               backgroundColor: AppColors.green,
             ),
           );
         }
       }
     } catch (e) {
+      debugPrint('❌ Refresh error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -872,6 +903,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             backgroundColor: AppColors.red,
           ),
         );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingVoice = false);
       }
     }
   }

@@ -142,9 +142,17 @@ class VoiceTriggerService {
 
     await _storage.setArmed(true);
 
-    // Démarrer le service de maintien en arrière-plan pour iOS
+    // Démarrer le service de maintien en arrière-plan pour iOS (non-bloquant)
     if (Platform.isIOS) {
-      await BackgroundKeepAliveService.instance.start();
+      // Lancer en arrière-plan sans attendre
+      BackgroundKeepAliveService.instance.start().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {
+          debugPrint('⚠️ BackgroundKeepAlive timeout, ignoré');
+        },
+      ).catchError((e) {
+        debugPrint('⚠️ BackgroundKeepAlive error: $e');
+      });
     }
 
     if (Platform.isAndroid) {
@@ -184,8 +192,8 @@ class VoiceTriggerService {
     final days = await _storage.getScheduleDays();
 
     try {
-      // Utiliser le canal natif iOS avec timeout pour éviter le blocage
-      await _channel.invokeMethod('startListening', {
+      // Utiliser le canal natif iOS avec timeout court
+      final result = await _channel.invokeMethod('startListening', {
         'keyword': keyword,
         'recordingDurationSec': recordingDurationSec,
         'schedule': {
@@ -197,16 +205,22 @@ class VoiceTriggerService {
           'days': days,
         },
       }).timeout(
-        const Duration(seconds: 5),
+        const Duration(seconds: 3),
         onTimeout: () {
-          debugPrint('⚠️ iOS: Timeout écoute native, utilisation du fallback');
-          return null;
+          debugPrint('⚠️ iOS: Timeout écoute native (3s), passage au fallback Flutter');
+          return 'timeout';
         },
       );
-      debugPrint('🎤 iOS: Écoute native démarrée via VoiceTriggerManager');
+      
+      if (result == 'timeout') {
+        // Fallback sur Flutter speech_to_text
+        await _startFlutterSpeechListening(keyword, recordingDurationSec);
+      } else {
+        debugPrint('🎤 iOS: Écoute native démarrée via VoiceTriggerManager');
+      }
     } catch (e) {
       debugPrint('❌ iOS: Erreur écoute native: $e');
-      // Fallback sur speech_to_text Flutter (moins fiable en background)
+      // Fallback sur speech_to_text Flutter
       await _startFlutterSpeechListening(keyword, recordingDurationSec);
     }
   }
