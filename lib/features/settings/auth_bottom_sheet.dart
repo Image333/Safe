@@ -6,14 +6,19 @@ import '../../core/services/api_service.dart';
 enum AuthMode { login, register }
 
 class AuthBottomSheet extends StatefulWidget {
-  const AuthBottomSheet({super.key});
+  final AuthMode initialMode;
 
-  static Future<void> show(BuildContext context) {
+  const AuthBottomSheet({super.key, this.initialMode = AuthMode.login});
+
+  static Future<void> show(
+    BuildContext context, {
+    AuthMode initialMode = AuthMode.login,
+  }) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => const AuthBottomSheet(),
+      builder: (_) => AuthBottomSheet(initialMode: initialMode),
     );
   }
 
@@ -23,7 +28,7 @@ class AuthBottomSheet extends StatefulWidget {
 
 class _AuthBottomSheetState extends State<AuthBottomSheet>
     with SingleTickerProviderStateMixin {
-  AuthMode _mode = AuthMode.login;
+  late AuthMode _mode;
   bool _loading = false;
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
@@ -44,6 +49,7 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
   @override
   void initState() {
     super.initState();
+    _mode = widget.initialMode;
     _slideController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),

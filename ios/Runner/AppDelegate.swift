@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import AVFoundation
+import MediaPlayer
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -33,10 +34,10 @@ import AVFoundation
       name: "safe/volume_button",
       binaryMessenger: binaryMessenger
     )
-    
+
     let detector = VolumeButtonDetector()
     eventChannel.setStreamHandler(detector)
-    
+
     volumeButtonDetector = detector
     volumeButtonEventChannel = eventChannel
   }
@@ -111,81 +112,165 @@ private final class VoiceTriggerCoordinator {
 
 // MARK: - Volume Button Detector
 
+/// Détecte les appuis hardware volume via KVO sur `outputVolume`.
+/// Remet le volume au milieu après chaque appui pour que Volume+ reste
+/// détectable même quand le volume système est déjà à fond.
 private final class VolumeButtonDetector: NSObject, FlutterStreamHandler {
   private var eventSink: FlutterEventSink?
-  private var volumeView: UIView?
-  private var audioSession: AVAudioSession?
-  private var initialVolume: Float = 0.5
-  
+  private var volumeView: MPVolumeView?
+  private var volumeObservation: NSKeyValueObservation?
+  private var baselineVolume: Float = 0.5
+  private var isResettingVolume = false
+  private var isObserving = false
+  private var attachAttempts = 0
+  private let maxAttachAttempts = 20
+
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     self.eventSink = events
     startListening()
     return nil
   }
-  
+
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
     stopListening()
     self.eventSink = nil
     return nil
   }
-  
+
   private func startListening() {
-    audioSession = AVAudioSession.sharedInstance()
-    
-    // Configure audio session
+    guard !isObserving else { return }
+    isObserving = true
+    attachAttempts = 0
+
+    let session = AVAudioSession.sharedInstance()
     do {
-      try audioSession?.setActive(true)
+      try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+      try session.setActive(true)
     } catch {
-      print("⚠️ Error activating audio session: \(error)")
+      print("⚠️ VolumeButtonDetector: session audio — \(error)")
     }
-    
-    // Get initial volume
-    initialVolume = audioSession?.outputVolume ?? 0.5
-    
-    // Observe volume changes
-    audioSession?.addObserver(self, forKeyPath: "outputVolume", options: [.new, .old], context: nil)
-    
-    // Create hidden volume view to enable volume button detection
-    setupVolumeView()
+
+    baselineVolume = sanitizedVolume(session.outputVolume)
+
+    // La fenêtre Flutter peut ne pas être prête immédiatement
+    DispatchQueue.main.async { [weak self] in
+      self?.attachVolumeViewAndObserve()
+    }
   }
-  
-  private func setupVolumeView() {
-    guard let window = UIApplication.shared.windows.first else { return }
-    
-    // Create an MPVolumeView and hide it
-    let volumeView = UIView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
-    window.addSubview(volumeView)
-    self.volumeView = volumeView
-  }
-  
-  private func stopListening() {
-    audioSession?.removeObserver(self, forKeyPath: "outputVolume")
-    volumeView?.removeFromSuperview()
-    volumeView = nil
-    
-    // Reset volume to initial value
-    // Note: Can't programmatically set volume on iOS directly
-  }
-  
-  override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-    if keyPath == "outputVolume" {
-      guard let newValue = change?[.newKey] as? Float,
-            let oldValue = change?[.oldKey] as? Float else {
+
+  private func attachVolumeViewAndObserve() {
+    guard isObserving else { return }
+
+    if volumeView == nil {
+      setupVolumeView()
+    }
+
+    // Le slider interne de MPVolumeView apparaît parfois avec un léger délai
+    if volumeSlider() == nil {
+      attachAttempts += 1
+      if attachAttempts >= maxAttachAttempts {
+        // Observe quand même : la détection marche sans reset de volume
+        print("⚠️ VolumeButtonDetector: slider indisponible, KVO seul")
+        startVolumeObservation()
         return
       }
-      
-      // Detect volume button press
-      if newValue != oldValue {
-        let direction = newValue > oldValue ? "up" : "down"
-        eventSink?(direction)
-        
-        // Try to reset volume to prevent actual volume change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-          guard let self = self else { return }
-          // Note: MPVolumeView slider manipulation would go here
-          // but it's increasingly restricted in newer iOS versions
-        }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        self?.attachVolumeViewAndObserve()
+      }
+      return
+    }
+
+    setSystemVolume(baselineVolume)
+    startVolumeObservation()
+  }
+
+  private func startVolumeObservation() {
+    guard volumeObservation == nil else { return }
+    let session = AVAudioSession.sharedInstance()
+    volumeObservation = session.observe(\.outputVolume, options: [.new, .old]) { [weak self] _, change in
+      self?.handleVolumeChange(change: change)
+    }
+  }
+
+  private func stopListening() {
+    volumeObservation?.invalidate()
+    volumeObservation = nil
+    volumeView?.removeFromSuperview()
+    volumeView = nil
+    isObserving = false
+    isResettingVolume = false
+    attachAttempts = 0
+  }
+
+  private func setupVolumeView() {
+    guard let hostView = keyWindow()?.rootViewController?.view ?? keyWindow() else {
+      print("⚠️ VolumeButtonDetector: aucune fenêtre disponible")
+      return
+    }
+
+    let view = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+    view.alpha = 0.01
+    view.isUserInteractionEnabled = false
+    view.showsRouteButton = false
+    hostView.addSubview(view)
+    volumeView = view
+  }
+
+  private func keyWindow() -> UIWindow? {
+    let scenes = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+
+    for scene in scenes {
+      if let key = scene.windows.first(where: \.isKeyWindow) {
+        return key
       }
     }
+    return scenes.flatMap(\.windows).first
+  }
+
+  private func handleVolumeChange(change: NSKeyValueObservedChange<Float>) {
+    guard let newValue = change.newValue else { return }
+
+    if isResettingVolume {
+      // Ignore le changement provoqué par notre reset programmatique
+      if abs(newValue - baselineVolume) < 0.001 {
+        isResettingVolume = false
+      }
+      return
+    }
+
+    let oldValue = change.oldValue ?? baselineVolume
+    guard abs(newValue - oldValue) > 0.001 else { return }
+
+    let direction = newValue > oldValue ? "up" : "down"
+    DispatchQueue.main.async { [weak self] in
+      self?.eventSink?(direction)
+    }
+
+    // Remet le volume au milieu pour pouvoir détecter les appuis suivants
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+      self?.resetVolumeToBaseline()
+    }
+  }
+
+  private func resetVolumeToBaseline() {
+    isResettingVolume = true
+    setSystemVolume(baselineVolume)
+  }
+
+  private func setSystemVolume(_ value: Float) {
+    guard let slider = volumeSlider() else { return }
+    // setValue sans animation + un petit nudge force iOS à appliquer la valeur
+    slider.value = value
+    slider.sendActions(for: .touchUpInside)
+  }
+
+  private func volumeSlider() -> UISlider? {
+    volumeView?.subviews.first(where: { $0 is UISlider }) as? UISlider
+  }
+
+  /// Évite 0 et 1 : à ces bornes, un appui volume ne change plus `outputVolume`.
+  private func sanitizedVolume(_ volume: Float) -> Float {
+    min(max(volume, 0.05), 0.95)
   }
 }

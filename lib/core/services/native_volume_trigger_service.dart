@@ -61,13 +61,21 @@ class NativeVolumeTriggerService {
   /// Gère une pression sur un bouton de volume
   void _onVolumeButtonPress(dynamic direction) {
     if (!_isListening) return;
-    
-    final now = DateTime.now();
-    
-    if (kDebugMode) {
-      print('🔊 Bouton volume ${direction}: ${now.toIso8601String()}');
+
+    // Seul Volume + déclenche l'alerte (pas Volume −)
+    if (direction != 'up') {
+      if (kDebugMode) {
+        print('🔇 Bouton volume $direction ignoré (seul + compte)');
+      }
+      return;
     }
-    
+
+    final now = DateTime.now();
+
+    if (kDebugMode) {
+      print('🔊 Bouton volume +: ${now.toIso8601String()}');
+    }
+
     _registerVolumePress(now);
   }
 
