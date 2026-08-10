@@ -7,6 +7,7 @@ import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/services/app_reset_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/storage/camouflage_storage.dart';
+import '../../../core/storage/trusted_contacts_storage.dart';
 import '../../../core/theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -17,6 +18,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _camouflageStorage = CamouflageStorage();
+  final _trustedContactsStorage = TrustedContactsStorage();
   final _camouflageService = AppCamouflageService();
   final _voiceTriggerService = VoiceTriggerService();
   final _keywordController = TextEditingController();
@@ -30,12 +32,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _voiceTriggerArmed = false;
   int _voiceRecordingDurationSec = VoiceTriggerService.defaultRecordingDurationSec;
   String _camouflageApp   = 'meteo';
+  int _trustedContactsCount = 0;
 
   @override
   void initState() {
     super.initState();
     _loadCamouflageSettings();
     _loadVoiceTriggerSettings();
+    _loadTrustedContactsCount();
+  }
+
+  Future<void> _loadTrustedContactsCount() async {
+    final count = await _trustedContactsStorage.count();
+    if (!mounted) return;
+    setState(() => _trustedContactsCount = count);
   }
 
   @override
@@ -297,8 +307,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     iconBg: AppColors.orangeL,
                     iconColor: AppColors.orange,
                     title: 'Gérer les contacts',
-                    subtitle: '2 contacts configurés',
-                    onTap: () => Navigator.pushNamed(context, AppRouter.contacts),
+                    subtitle: _trustedContactsCount == 0
+                        ? 'Aucun contact configuré'
+                        : '$_trustedContactsCount contact${_trustedContactsCount > 1 ? 's' : ''} configuré${_trustedContactsCount > 1 ? 's' : ''}',
+                    onTap: () async {
+                      await Navigator.pushNamed(context, AppRouter.contacts);
+                      await _loadTrustedContactsCount();
+                    },
                   ),
                 ]),
 

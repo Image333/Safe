@@ -43,6 +43,7 @@ dependencies:
   flutter_svg: ^2.0.10+1
   flutter_contacts: ^2.2.1
   flutter_dynamic_icon: ^2.1.0
+  flutter_sms: ^2.3.3
 
 dev_dependencies:
   flutter_test:

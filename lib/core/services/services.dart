@@ -4,6 +4,7 @@ export 'auth_service.dart';
 export 'app_camouflage_service.dart';
 export 'app_reset_service.dart';
 export 'device_contacts_service.dart';
+export 'alert_message_service.dart';
 export 'voice_trigger_service.dart';
 
 // Services audio et enregistrement

@@ -1,15 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../../core/services/device_contacts_service.dart';
+import '../../../core/storage/trusted_contacts_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
 import '../widgets/contact_picker_sheet.dart';
-
-class Contact {
-  final String name;
-  final String phone;
-  Contact({required this.name, required this.phone});
-}
 
 class ContactsScreen extends StatefulWidget {
   const ContactsScreen({super.key});
@@ -18,16 +13,19 @@ class ContactsScreen extends StatefulWidget {
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
-  final List<Contact> _contacts = [];
+  final TrustedContactsStorage _storage = TrustedContactsStorage();
+  final List<TrustedContact> _contacts = [];
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
 
   bool _showImportButton = true;
+  bool _loading = true;
   List<DeviceContactEntry> _deviceContacts = [];
 
   @override
   void initState() {
     super.initState();
+    _loadContacts();
     _checkExistingDeviceContacts();
   }
 
@@ -36,6 +34,21 @@ class _ContactsScreenState extends State<ContactsScreen> {
     _nameController.dispose();
     _phoneController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadContacts() async {
+    final saved = await _storage.load();
+    if (!mounted) return;
+    setState(() {
+      _contacts
+        ..clear()
+        ..addAll(saved);
+      _loading = false;
+    });
+  }
+
+  Future<void> _persistContacts() async {
+    await _storage.save(List<TrustedContact>.from(_contacts));
   }
 
   Set<String> get _addedPhones =>
@@ -53,7 +66,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     });
   }
 
-  void _addContact({String? name, String? phone}) {
+  Future<void> _addContact({String? name, String? phone}) async {
     final contactName = (name ?? _nameController.text).trim();
     final contactPhone = (phone ?? _phoneController.text).trim();
     if (contactName.isEmpty || contactPhone.isEmpty) return;
@@ -62,27 +75,32 @@ class _ContactsScreenState extends State<ContactsScreen> {
     if (_addedPhones.contains(normalized)) return;
 
     setState(() {
-      _contacts.add(Contact(name: contactName, phone: contactPhone));
+      _contacts.add(TrustedContact(name: contactName, phone: contactPhone));
       _nameController.clear();
       _phoneController.clear();
     });
+    await _persistContacts();
   }
 
-  void _addContactsFromDevice(List<DeviceContactEntry> entries) {
+  Future<void> _addContactsFromDevice(List<DeviceContactEntry> entries) async {
     final addedPhones = Set<String>.from(_addedPhones);
     var added = false;
     for (final entry in entries) {
       final normalized = DeviceContactsService.normalizePhone(entry.phone);
       if (addedPhones.contains(normalized)) continue;
-      _contacts.add(Contact(name: entry.name, phone: entry.phone));
+      _contacts.add(TrustedContact(name: entry.name, phone: entry.phone));
       addedPhones.add(normalized);
       added = true;
     }
-    if (added) setState(() {});
+    if (added) {
+      setState(() {});
+      await _persistContacts();
+    }
   }
 
-  void _removeContact(int index) {
+  Future<void> _removeContact(int index) async {
     setState(() => _contacts.removeAt(index));
+    await _persistContacts();
   }
 
   Future<void> _importFromDevice() async {
@@ -131,7 +149,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     );
 
     if (selected != null && selected.isNotEmpty) {
-      _addContactsFromDevice(selected);
+      await _addContactsFromDevice(selected);
     }
   }
 
@@ -162,9 +180,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton(
-              onPressed: () {
-                _addContact();
-                Navigator.of(context).pop();
+              onPressed: () async {
+                final navigator = Navigator.of(context);
+                await _addContact();
+                if (!mounted) return;
+                navigator.pop();
               },
               child: const Text('Ajouter'),
             ),
@@ -190,16 +210,18 @@ class _ContactsScreenState extends State<ContactsScreen> {
             const Text('Ces personnes recevront une alerte avec votre position dès que vous déclencherez Safe.', style: TextStyle(fontSize: 15, color: AppColors.grayMid, height: 1.5)),
             const SizedBox(height: 28),
             Expanded(
-              child: _contacts.isEmpty
-                  ? _buildEmpty()
-                  : ListView.separated(
-                      itemCount: _contacts.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (_, i) => _ContactTile(
-                        contact: _contacts[i],
-                        onDelete: () => _removeContact(i),
-                      ),
-                    ),
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _contacts.isEmpty
+                      ? _buildEmpty()
+                      : ListView.separated(
+                          itemCount: _contacts.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (_, i) => _ContactTile(
+                            contact: _contacts[i],
+                            onDelete: () => _removeContact(i),
+                          ),
+                        ),
             ),
             const SizedBox(height: 16),
             if (_showImportButton)
@@ -284,7 +306,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 }
 
 class _ContactTile extends StatelessWidget {
-  final Contact contact;
+  final TrustedContact contact;
   final VoidCallback onDelete;
   const _ContactTile({required this.contact, required this.onDelete});
 

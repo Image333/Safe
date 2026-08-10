@@ -8,6 +8,8 @@ import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/services/native_volume_trigger_service.dart';
 import '../../../core/services/audio_history_service.dart';
 import '../../../core/services/audio_sync_service.dart';
+import '../../../core/services/alert_message_service.dart';
+import '../../../core/storage/trusted_contacts_storage.dart';
 import '../../settings/auth_bottom_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -30,6 +32,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final NativeVolumeTriggerService _nativeVolumeTriggerService;
   final AudioHistoryService _audioHistoryService = AudioHistoryService();
   final AudioSyncService _audioSyncService = AudioSyncService();
+  final TrustedContactsStorage _trustedContactsStorage = TrustedContactsStorage();
+  final AlertMessageService _alertMessageService = AlertMessageService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -227,9 +231,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     setState(() => _alertSent = true);
     _recordEmergencyClip();
 
-    // TODO : appel backend Go + GPS + envoi aux contacts
-    // Note: Le message de confirmation sera affiché après l'enregistrement
-
     // Reset après 5 secondes
     Future.delayed(const Duration(seconds: 5), () {
       if (mounted) setState(() => _alertSent = false);
@@ -296,6 +297,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
         ),
       );
+
+      await _notifyTrustedContacts(audioUrl: syncResult.blobUrl);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -314,6 +317,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         setState(() => _isRecordingClip = false);
       }
     }
+  }
+
+  Future<void> _notifyTrustedContacts({String? audioUrl}) async {
+    final contacts = await _trustedContactsStorage.load();
+    final phones = contacts.map((c) => c.phone).toList();
+
+    final error = await _alertMessageService.notifyTrustedContacts(
+      phones: phones,
+      audioUrl: audioUrl,
+    );
+
+    if (!mounted || error == null) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppColors.orange,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        content: Text(
+          error,
+          style: const TextStyle(
+            color: AppColors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
   }
 
   String _formatDuration(int seconds) {
