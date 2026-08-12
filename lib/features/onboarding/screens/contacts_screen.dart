@@ -6,8 +6,13 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
 import '../widgets/contact_picker_sheet.dart';
 
+enum ContactsScreenMode { onboarding, settings }
+
 class ContactsScreen extends StatefulWidget {
-  const ContactsScreen({super.key});
+  final ContactsScreenMode mode;
+
+  const ContactsScreen({super.key, this.mode = ContactsScreenMode.onboarding});
+
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
 }
@@ -195,18 +200,45 @@ class _ContactsScreenState extends State<ContactsScreen> {
     );
   }
 
+  bool get _isSettings => widget.mode == ContactsScreenMode.settings;
+
+  void _onPrimaryAction() {
+    if (_isSettings) {
+      Navigator.pop(context);
+      return;
+    }
+    Navigator.pushNamed(context, AppRouter.trigger);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: _isSettings
+          ? AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back, color: AppColors.navy),
+                onPressed: () => Navigator.pop(context),
+              ),
+              title: const Text(
+                'Contacts de confiance',
+                style: TextStyle(color: AppColors.navy, fontWeight: FontWeight.w600),
+              ),
+            )
+          : null,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const SizedBox(height: 24),
-            _buildProgress(2),
-            const SizedBox(height: 32),
-            const Text('Contacts de confiance', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.navy)),
-            const SizedBox(height: 8),
+            if (!_isSettings) ...[
+              const SizedBox(height: 24),
+              _buildProgress(2),
+              const SizedBox(height: 32),
+              const Text('Contacts de confiance', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.navy)),
+              const SizedBox(height: 8),
+            ] else
+              const SizedBox(height: 8),
             const Text('Ces personnes recevront une alerte avec votre position dès que vous déclencherez Safe.', style: TextStyle(fontSize: 15, color: AppColors.grayMid, height: 1.5)),
             const SizedBox(height: 28),
             Expanded(
@@ -258,8 +290,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton(
-              onPressed: _contacts.isEmpty ? null : () => Navigator.pushNamed(context, AppRouter.trigger),
-              child: const Text('Continuer'),
+              onPressed: _contacts.isEmpty ? null : _onPrimaryAction,
+              child: Text(_isSettings ? 'Terminé' : 'Continuer'),
             ),
             const SizedBox(height: 32),
           ]),
@@ -283,7 +315,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
         Text(
           _showImportButton
               ? 'Choisissez dans vos contacts\nou ajoutez-en un manuellement.'
-              : 'Ajoutez au moins un contact\npour continuer.',
+              : _isSettings
+                  ? 'Ajoutez au moins un contact\nde confiance.'
+                  : 'Ajoutez au moins un contact\npour continuer.',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 14, color: AppColors.grayMid),
         ),

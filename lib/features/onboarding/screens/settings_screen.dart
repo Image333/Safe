@@ -9,6 +9,7 @@ import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/storage/camouflage_storage.dart';
 import '../../../core/storage/trusted_contacts_storage.dart';
 import '../../../core/theme/app_theme.dart';
+import 'contacts_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -311,7 +312,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? 'Aucun contact configuré'
                         : '$_trustedContactsCount contact${_trustedContactsCount > 1 ? 's' : ''} configuré${_trustedContactsCount > 1 ? 's' : ''}',
                     onTap: () async {
-                      await Navigator.pushNamed(context, AppRouter.contacts);
+                      await Navigator.pushNamed(
+                        context,
+                        AppRouter.contacts,
+                        arguments: ContactsScreenMode.settings,
+                      );
                       await _loadTrustedContactsCount();
                     },
                   ),
