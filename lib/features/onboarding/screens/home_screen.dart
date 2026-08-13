@@ -11,6 +11,7 @@ import '../../../core/services/audio_sync_service.dart';
 import '../../../core/services/alert_message_service.dart';
 import '../../../core/storage/trusted_contacts_storage.dart';
 import '../../settings/auth_bottom_sheet.dart';
+import '../widgets/alert_confirm_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,7 +34,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final AudioHistoryService _audioHistoryService = AudioHistoryService();
   final AudioSyncService _audioSyncService = AudioSyncService();
   final TrustedContactsStorage _trustedContactsStorage = TrustedContactsStorage();
-  final AlertMessageService _alertMessageService = AlertMessageService();
+  final AlertMessageService _alertMessageService = const AlertMessageService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -321,8 +322,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _notifyTrustedContacts({String? audioUrl}) async {
     final contacts = await _trustedContactsStorage.load();
-    final phones = contacts.map((c) => c.phone).toList();
+    if (contacts.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.orange,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: const Text(
+            'Aucun contact de confiance configuré.',
+            style: TextStyle(
+              color: AppColors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+      return;
+    }
 
+    if (!mounted) return;
+
+    final confirmed = await AlertConfirmSheet.show(
+      context,
+      contacts: contacts,
+      audioUrl: audioUrl,
+      messageService: _alertMessageService,
+    );
+
+    if (!mounted || confirmed != true) return;
+
+    final phones = contacts.map((c) => c.phone).toList();
     final error = await _alertMessageService.notifyTrustedContacts(
       phones: phones,
       audioUrl: audioUrl,
