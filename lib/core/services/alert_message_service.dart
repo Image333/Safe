@@ -2,6 +2,8 @@ import 'package:flutter_sms/flutter_sms.dart';
 
 /// Ouvre l'app Messages avec un compose prérempli (pas d'envoi silencieux).
 class AlertMessageService {
+  const AlertMessageService();
+
   Future<bool> canSend() => canSendSMS();
 
   String buildAlertBody({String? audioUrl}) {
