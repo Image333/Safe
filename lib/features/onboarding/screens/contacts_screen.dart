@@ -71,13 +71,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
     });
   }
 
-  Future<void> _addContact({String? name, String? phone}) async {
+  Future<bool> _addContact({String? name, String? phone}) async {
     final contactName = (name ?? _nameController.text).trim();
     final contactPhone = (phone ?? _phoneController.text).trim();
-    if (contactName.isEmpty || contactPhone.isEmpty) return;
+    if (contactName.isEmpty || contactPhone.isEmpty) return false;
 
     final normalized = DeviceContactsService.normalizePhone(contactPhone);
-    if (_addedPhones.contains(normalized)) return;
+    if (_addedPhones.contains(normalized)) {
+      _showDuplicatePhoneSnackBar();
+      return false;
+    }
 
     setState(() {
       _contacts.add(TrustedContact(name: contactName, phone: contactPhone));
@@ -85,6 +88,41 @@ class _ContactsScreenState extends State<ContactsScreen> {
       _phoneController.clear();
     });
     await _persistContacts();
+    return true;
+  }
+
+  Future<bool> _updateContact(int index, {String? name, String? phone}) async {
+    final contactName = (name ?? _nameController.text).trim();
+    final contactPhone = (phone ?? _phoneController.text).trim();
+    if (contactName.isEmpty || contactPhone.isEmpty) return false;
+
+    final normalized = DeviceContactsService.normalizePhone(contactPhone);
+    final duplicate = _contacts.asMap().entries.any(
+          (entry) =>
+              entry.key != index &&
+              DeviceContactsService.normalizePhone(entry.value.phone) == normalized,
+        );
+    if (duplicate) {
+      _showDuplicatePhoneSnackBar();
+      return false;
+    }
+
+    setState(() {
+      _contacts[index] = TrustedContact(name: contactName, phone: contactPhone);
+      _nameController.clear();
+      _phoneController.clear();
+    });
+    await _persistContacts();
+    return true;
+  }
+
+  void _showDuplicatePhoneSnackBar() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Ce numéro est déjà utilisé par un autre contact.'),
+      ),
+    );
   }
 
   Future<void> _addContactsFromDevice(List<DeviceContactEntry> entries) async {
@@ -158,7 +196,21 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
-  void _showAddSheet() {
+  void _showAddSheet() => _showContactSheet();
+
+  void _showEditSheet(int index) => _showContactSheet(editIndex: index);
+
+  void _showContactSheet({int? editIndex}) {
+    final isEdit = editIndex != null;
+    if (isEdit) {
+      final contact = _contacts[editIndex];
+      _nameController.text = contact.name;
+      _phoneController.text = contact.phone;
+    } else {
+      _nameController.clear();
+      _phoneController.clear();
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -172,7 +224,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Ajouter un contact', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.navy)),
+            Text(
+              isEdit ? 'Modifier le contact' : 'Ajouter un contact',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.navy),
+            ),
             const SizedBox(height: 20),
             _InputField(controller: _nameController, label: 'Prénom et nom', icon: Icons.person_outline),
             const SizedBox(height: 14),
@@ -187,11 +242,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
             ElevatedButton(
               onPressed: () async {
                 final navigator = Navigator.of(context);
-                await _addContact();
-                if (!mounted) return;
+                final saved = isEdit
+                    ? await _updateContact(editIndex)
+                    : await _addContact();
+                if (!mounted || !saved) return;
                 navigator.pop();
               },
-              child: const Text('Ajouter'),
+              child: Text(isEdit ? 'Enregistrer' : 'Ajouter'),
             ),
             const SizedBox(height: 8),
           ]),
@@ -251,6 +308,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           separatorBuilder: (_, __) => const SizedBox(height: 10),
                           itemBuilder: (_, i) => _ContactTile(
                             contact: _contacts[i],
+                            onEdit: () => _showEditSheet(i),
                             onDelete: () => _removeContact(i),
                           ),
                         ),
@@ -341,8 +399,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
 class _ContactTile extends StatelessWidget {
   final TrustedContact contact;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
-  const _ContactTile({required this.contact, required this.onDelete});
+
+  const _ContactTile({
+    required this.contact,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -368,8 +432,14 @@ class _ContactTile extends StatelessWidget {
           Text(contact.phone, style: const TextStyle(fontSize: 13, color: AppColors.grayMid)),
         ])),
         IconButton(
+          onPressed: onEdit,
+          icon: const Icon(Icons.edit_outlined, color: AppColors.navy, size: 20),
+          tooltip: 'Modifier',
+        ),
+        IconButton(
           onPressed: onDelete,
           icon: const Icon(Icons.delete_outline, color: AppColors.grayMid, size: 20),
+          tooltip: 'Supprimer',
         ),
       ]),
     );
