@@ -39,6 +39,9 @@ dependencies:
   volume_watcher: ^2.0.1
   just_audio: ^0.9.0
 
+  # Reconnaissance vocale (utilise les APIs natives Apple/Google)
+  speech_to_text: ^6.6.0
+
   # Icônes
   flutter_svg: ^2.0.10+1
   flutter_contacts: ^2.2.1

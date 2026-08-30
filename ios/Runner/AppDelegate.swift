@@ -2,10 +2,10 @@ import Flutter
 import UIKit
 import AVFoundation
 import MediaPlayer
+import Speech
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
-  private let voiceTriggerCoordinator = VoiceTriggerCoordinator()
   private var voiceTriggerMethodChannel: FlutterMethodChannel?
   private var volumeButtonDetector: VolumeButtonDetector?
   private var volumeButtonEventChannel: FlutterEventChannel?
@@ -15,6 +15,10 @@ import MediaPlayer
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    
+    // Configurer les callbacks du VoiceTriggerManager
+    setupVoiceTriggerCallbacks()
+    
     return true
   }
 
@@ -26,6 +30,30 @@ import MediaPlayer
       let messenger = registrar.messenger()
       setUpVoiceTriggerChannel(binaryMessenger: messenger)
       setUpVolumeButtonChannel(binaryMessenger: messenger)
+    }
+  }
+  
+  private func setupVoiceTriggerCallbacks() {
+    let manager = VoiceTriggerManager.shared
+    
+    manager.onKeywordDetected = {
+      print("🚨 iOS: Mot-clé détecté - déclenchement enregistrement")
+      // Vibration haptique pour confirmer
+      let generator = UINotificationFeedbackGenerator()
+      generator.notificationOccurred(.warning)
+    }
+    
+    manager.onRecordingStarted = {
+      print("🔴 iOS: Enregistrement d'urgence démarré")
+    }
+    
+    manager.onRecordingFinished = { url in
+      print("⬛ iOS: Enregistrement sauvegardé: \(url.path)")
+      // TODO: Notifier Flutter pour mettre à jour l'historique
+    }
+    
+    manager.onError = { error in
+      print("⚠️ iOS: Erreur VoiceTrigger: \(error.localizedDescription)")
     }
   }
 
@@ -49,64 +77,83 @@ import MediaPlayer
     )
 
     channel.setMethodCallHandler { [weak self] call, callback in
-      guard let self else {
+      guard self != nil else {
         callback(FlutterError(code: "unavailable", message: "AppDelegate unavailable", details: nil))
         return
       }
+      
+      let manager = VoiceTriggerManager.shared
 
       switch call.method {
       case "startListening":
         do {
-          try self.voiceTriggerCoordinator.startListening(arguments: call.arguments)
+          // Parser les arguments
+          if let payload = call.arguments as? [String: Any] {
+            let keyword = payload["keyword"] as? String ?? ""
+            let recordingDurationSec = payload["recordingDurationSec"] as? Int ?? 15
+            
+            print("📱 iOS startListening: keyword='\(keyword)', duration=\(recordingDurationSec)s")
+            
+            // Parser la configuration de plage horaire
+            var scheduleConfig: ScheduleConfig? = nil
+            if let scheduleData = payload["schedule"] as? [String: Any] {
+              let enabled = scheduleData["enabled"] as? Bool ?? false
+              print("📱 iOS schedule: enabled=\(enabled)")
+              if enabled {
+                scheduleConfig = ScheduleConfig(
+                  enabled: true,
+                  startHour: scheduleData["startHour"] as? Int ?? 22,
+                  startMinute: scheduleData["startMinute"] as? Int ?? 0,
+                  endHour: scheduleData["endHour"] as? Int ?? 7,
+                  endMinute: scheduleData["endMinute"] as? Int ?? 0,
+                  days: scheduleData["days"] as? [Int] ?? [0, 1, 2, 3, 4, 5, 6]
+                )
+              }
+            }
+            
+            manager.configure(
+              keyword: keyword,
+              recordingDurationSec: recordingDurationSec,
+              schedule: scheduleConfig
+            )
+            print("📱 iOS: VoiceTriggerManager configuré")
+          }
+          
+          try manager.startListening()
+          print("📱 iOS: startListening() réussi")
           callback(nil)
         } catch {
+          print("📱 iOS: startListening() ERREUR: \(error)")
           callback(FlutterError(code: "start_failed", message: error.localizedDescription, details: nil))
         }
+        
       case "stopListening":
-        self.voiceTriggerCoordinator.stopListening()
+        manager.stopListening()
         callback(nil)
+        
+      case "requestSpeechPermission":
+        SFSpeechRecognizer.requestAuthorization { status in
+          DispatchQueue.main.async {
+            callback(status == .authorized)
+          }
+        }
+        
+      case "checkSpeechPermission":
+        let status = SFSpeechRecognizer.authorizationStatus()
+        callback(status == .authorized)
+        
+      case "isListening":
+        callback(manager.isListening)
+        
+      case "isRecording":
+        callback(manager.isRecording)
+        
       default:
         callback(FlutterMethodNotImplemented)
       }
     }
 
     voiceTriggerMethodChannel = channel
-  }
-}
-
-private final class VoiceTriggerCoordinator {
-  private var isListening = false
-  private let minRecordingDurationSec = 5
-  private let maxRecordingDurationSec = 600
-  private var recordingDurationSec = 15
-  private var keyword: String = ""
-
-  func startListening(arguments: Any?) throws {
-    guard !isListening else { return }
-
-    if let payload = arguments as? [String: Any] {
-      if let value = payload["recordingDurationSec"] as? Int {
-        recordingDurationSec = min(max(value, minRecordingDurationSec), maxRecordingDurationSec)
-      }
-
-      if let value = payload["keyword"] as? String {
-        keyword = value
-      }
-    }
-
-    let session = AVAudioSession.sharedInstance()
-    try session.setCategory(.playAndRecord, options: [.mixWithOthers, .allowBluetooth])
-    try session.setActive(true)
-
-    isListening = true
-  }
-
-  func stopListening() {
-    guard isListening else { return }
-    isListening = false
-
-    let session = AVAudioSession.sharedInstance()
-    try? session.setActive(false, options: [.notifyOthersOnDeactivation])
   }
 }
 

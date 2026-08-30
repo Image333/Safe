@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../../core/router/app_router.dart';
@@ -30,6 +31,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _voiceTriggerArmed = false;
   int _voiceRecordingDurationSec = VoiceTriggerService.defaultRecordingDurationSec;
   String _camouflageApp   = 'meteo';
+  bool _isRefreshingVoice = false;
+
+  // Configuration de la plage horaire
+  bool _scheduleEnabled = false;
+  TimeOfDay _scheduleStartTime = const TimeOfDay(hour: 22, minute: 0);
+  TimeOfDay _scheduleEndTime = const TimeOfDay(hour: 7, minute: 0);
+  List<int> _scheduleDays = [0, 1, 2, 3, 4, 5, 6]; // Tous les jours par défaut
 
   @override
   void initState() {
@@ -74,6 +82,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (_voiceTriggerArmed || (config.keyword != null && config.keyword!.isNotEmpty)) {
         _selectedTrigger = 'keyword';
       }
+      
+      // Charger la configuration de plage horaire
+      if (config.schedule != null) {
+        _scheduleEnabled = config.schedule!.enabled;
+        _scheduleStartTime = TimeOfDay(
+          hour: config.schedule!.startHour,
+          minute: config.schedule!.startMinute,
+        );
+        _scheduleEndTime = TimeOfDay(
+          hour: config.schedule!.endHour,
+          minute: config.schedule!.endMinute,
+        );
+        _scheduleDays = List.from(config.schedule!.days);
+      }
     });
   }
 
@@ -90,6 +112,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
         final granted = await _confirmAndRequestMicrophonePermission();
         if (!mounted || !granted) return;
+
+        // Demander aussi la permission de reconnaissance vocale sur iOS
+        if (Platform.isIOS) {
+          final speechGranted = await _confirmAndRequestSpeechPermission();
+          if (!mounted || !speechGranted) return;
+        }
 
         await _persistVoiceConfig(keyword: keyword);
         await _voiceTriggerService.arm();
@@ -108,6 +136,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
         SnackBar(content: Text(e.toString().replaceFirst('StateError: ', ''))),
       );
     }
+  }
+
+  Future<bool> _confirmAndRequestSpeechPermission() async {
+    // Vérifier si déjà accordée
+    final alreadyGranted = await _voiceTriggerService.checkSpeechPermission();
+    if (alreadyGranted) return true;
+
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Autorisation reconnaissance vocale'),
+        content: const Text(
+          'Pour détecter votre mot-clé même lorsque l\'écran est verrouillé, '
+          'Safe a besoin d\'accéder à la reconnaissance vocale.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Autoriser'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRequest != true || !mounted) return false;
+
+    final granted = await _voiceTriggerService.requestSpeechPermission();
+    if (granted) return true;
+
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Autorisez la reconnaissance vocale dans les réglages.'),
+        action: SnackBarAction(
+          label: 'Réglages',
+          onPressed: openAppSettings,
+        ),
+      ),
+    );
+
+    return false;
   }
 
   Future<void> _saveKeywordOnly() async {
@@ -201,10 +275,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
       recordingDurationSec: _voiceRecordingDurationSec,
     );
 
+    // Sauvegarder aussi la configuration de plage horaire
+    await _voiceTriggerService.saveSchedule(
+      enabled: _scheduleEnabled,
+      startHour: _scheduleStartTime.hour,
+      startMinute: _scheduleStartTime.minute,
+      endHour: _scheduleEndTime.hour,
+      endMinute: _scheduleEndTime.minute,
+      days: _scheduleDays,
+    );
+
     if (_voiceTriggerArmed) {
       await _voiceTriggerService.disarm();
       await _voiceTriggerService.arm();
     }
+  }
+
+  Future<void> _onScheduleEnabledChanged(bool enabled) async {
+    setState(() => _scheduleEnabled = enabled);
+    await _persistVoiceConfig();
+  }
+
+  Future<void> _selectScheduleStartTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _scheduleStartTime,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.navy,
+              onSurface: AppColors.gray,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && mounted) {
+      setState(() => _scheduleStartTime = picked);
+      await _persistVoiceConfig();
+    }
+  }
+
+  Future<void> _selectScheduleEndTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _scheduleEndTime,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.navy,
+              onSurface: AppColors.gray,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && mounted) {
+      setState(() => _scheduleEndTime = picked);
+      await _persistVoiceConfig();
+    }
+  }
+
+  void _toggleScheduleDay(int day) async {
+    setState(() {
+      if (_scheduleDays.contains(day)) {
+        _scheduleDays.remove(day);
+      } else {
+        _scheduleDays.add(day);
+      }
+    });
+    await _persistVoiceConfig();
+  }
+
+  String _formatTimeOfDay(TimeOfDay time) {
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 
   Future<void> _setVoiceRecordingDuration(int seconds) async {
@@ -624,10 +774,336 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 fontWeight: FontWeight.w600,
               ),
             ),
+            if (_voiceTriggerArmed) ...[
+              const SizedBox(height: 12),
+              _buildListeningIndicator(),
+            ],
+            const SizedBox(height: 16),
+            _buildScheduleSettings(),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildListeningIndicator() {
+    final speechService = _voiceTriggerService.speechService;
+    final isListening = speechService.isListening;
+    final isInitialized = speechService.isInitialized;
+    
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isListening ? AppColors.greenLight : AppColors.orangeL,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          // Indicateur animé
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: isListening ? AppColors.green : AppColors.orange,
+              shape: BoxShape.circle,
+            ),
+            child: isListening
+                ? const _PulsingDot()
+                : null,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isListening 
+                      ? '🎤 Écoute en cours...'
+                      : isInitialized 
+                          ? '⏸️ En pause (hors plage horaire ?)'
+                          : '⚠️ Service non initialisé',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isListening ? AppColors.green : AppColors.orange,
+                  ),
+                ),
+                Text(
+                  'Init: $isInitialized • Écoute: $isListening',
+                  style: const TextStyle(fontSize: 10, color: AppColors.grayMid),
+                ),
+              ],
+            ),
+          ),
+          // Bouton de test
+          _isRefreshingVoice
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : IconButton(
+                  onPressed: _testSpeechRecognition,
+                  icon: const Icon(Icons.refresh, size: 20),
+                  color: AppColors.navy,
+                  tooltip: 'Relancer l\'écoute',
+                ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _testSpeechRecognition() async {
+    if (_isRefreshingVoice) return;
+    
+    setState(() => _isRefreshingVoice = true);
+    
+    try {
+      // Désarmer puis réarmer pour forcer le redémarrage
+      if (_voiceTriggerArmed) {
+        debugPrint('🔄 Refresh: Désarmement...');
+        await _voiceTriggerService.disarm();
+        await Future.delayed(const Duration(milliseconds: 300));
+        
+        debugPrint('🔄 Refresh: Réarmement...');
+        await _voiceTriggerService.arm();
+        
+        debugPrint('🔄 Refresh: Terminé!');
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('🎤 Écoute relancée - Dites votre mot-clé pour tester'),
+              backgroundColor: AppColors.green,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        // Si pas armé, on arme directement
+        debugPrint('🔄 Refresh: Armement initial...');
+        await _voiceTriggerService.arm();
+        setState(() => _voiceTriggerArmed = true);
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('🎤 Écoute activée - Dites votre mot-clé'),
+              backgroundColor: AppColors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Refresh error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur: $e'),
+            backgroundColor: AppColors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingVoice = false);
+      }
+    }
+  }
+
+  Widget _buildScheduleSettings() {
+    const dayLabels = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
+    
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.schedule,
+                    size: 20,
+                    color: _scheduleEnabled ? AppColors.navy : AppColors.grayMid,
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Plage horaire',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.navy,
+                    ),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _scheduleEnabled,
+                onChanged: _onScheduleEnabledChanged,
+                activeColor: AppColors.navy,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _scheduleEnabled 
+                ? 'L\'écoute vocale est active uniquement pendant cette plage.'
+                : 'L\'écoute vocale est active 24h/24.',
+            style: const TextStyle(fontSize: 12, color: AppColors.grayMid),
+          ),
+          if (_scheduleEnabled) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildTimeSelector(
+                    label: 'Début',
+                    time: _scheduleStartTime,
+                    onTap: _selectScheduleStartTime,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                const Icon(Icons.arrow_forward, color: AppColors.grayMid, size: 20),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildTimeSelector(
+                    label: 'Fin',
+                    time: _scheduleEndTime,
+                    onTap: _selectScheduleEndTime,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Jours actifs',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.gray,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: List.generate(7, (index) {
+                final isSelected = _scheduleDays.contains(index);
+                return GestureDetector(
+                  onTap: () => _toggleScheduleDay(index),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: isSelected ? AppColors.navy : AppColors.grayLight,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text(
+                        dayLabels[index],
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isSelected ? AppColors.white : AppColors.grayMid,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.blueLight,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, size: 18, color: AppColors.blue),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _getScheduleSummary(),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.blue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimeSelector({
+    required String label,
+    required TimeOfDay time,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        decoration: BoxDecoration(
+          color: AppColors.blueLight,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.blue.withOpacity(0.3)),
+        ),
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: AppColors.grayMid,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _formatTimeOfDay(time),
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: AppColors.navy,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getScheduleSummary() {
+    if (_scheduleDays.isEmpty) {
+      return 'Aucun jour sélectionné';
+    }
+
+    final startStr = _formatTimeOfDay(_scheduleStartTime);
+    final endStr = _formatTimeOfDay(_scheduleEndTime);
+    
+    if (_scheduleDays.length == 7) {
+      return 'Actif tous les jours de $startStr à $endStr';
+    }
+
+    const dayNames = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
+    final selectedDays = _scheduleDays.map((d) => dayNames[d]).join(', ');
+    
+    return 'Actif $selectedDays de $startStr à $endStr';
   }
 
   // ── Camouflage selector ───────────────────────────────────────────────────
@@ -723,6 +1199,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Widget animé pour indiquer que l'écoute est active
+class _PulsingDot extends StatefulWidget {
+  const _PulsingDot();
+
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1000),
+      vsync: this,
+    )..repeat(reverse: true);
+    
+    _animation = Tween<double>(begin: 0.4, end: 1.0).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, child) {
+        return Opacity(
+          opacity: _animation.value,
+          child: Container(
+            width: 12,
+            height: 12,
+            decoration: const BoxDecoration(
+              color: AppColors.green,
+              shape: BoxShape.circle,
+            ),
+          ),
+        );
+      },
     );
   }
 }
