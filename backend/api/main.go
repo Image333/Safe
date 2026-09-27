@@ -88,6 +88,8 @@ func main() {
 
 	routes.RegisterUserRoutes(api, db, keyMiddleware)
 	routes.RegisterAudioRoutes(api, db, keyMiddleware)
+	routes.RegisterConfigurationRoutes(api, db, keyMiddleware)
+	routes.RegisterAlertRoutes(api, db, keyMiddleware)
 
 
 	log.Println("Server starting on :8080...")

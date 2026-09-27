@@ -149,8 +149,6 @@ func RegisterUserRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Han
 
 	})
 
-
-
 	//
 	// Delete User
 	//
