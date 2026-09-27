@@ -82,7 +82,16 @@ Authorization: Bearer <your-jwt-token>
 | `GET /audio/{id}`         | `/api/v1/audio/{id}`        |
 | `GET /alerts/{id}/audio`  | `/api/v1/alerts/{id}/audio` |
 | `GET /me/audio`           | `/api/v1/me/audio`          |
-| `...`                     | `...`                       |
+| `POST /configurations`    | `/api/v1/configurations`    |
+| `GET /configurations`     | `/api/v1/configurations`    |
+| `GET /configurations/{id}` | `/api/v1/configurations/{id}` |
+| `PUT /configurations/{id}` | `/api/v1/configurations/{id}` |
+| `DELETE /configurations/{id}` | `/api/v1/configurations/{id}` |
+| `POST /alerts`            | `/api/v1/alerts`            |
+| `GET /alerts`             | `/api/v1/alerts`            |
+| `GET /alerts/{id}`        | `/api/v1/alerts/{id}`       |
+| `PUT /alerts/{id}`        | `/api/v1/alerts/{id}`       |
+| `DELETE /alerts/{id}`     | `/api/v1/alerts/{id}`       |
 
 ### Example Request
 
@@ -101,3 +110,5 @@ Content-Type: application/json
 # Documented enpoints
 - [Users](./endpoints/users.md)
 - [Audio](./endpoints/audio.md)
+- [Configurations](./endpoints/configurations.md)
+- [Alerts](./endpoints/alerts.md)
