@@ -30,7 +30,6 @@ type CreateAudioRequest struct {
 // RegisterAudioRoutes enregistre tous les endpoints audio
 func RegisterAudioRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler) {
 
-
 	router.Get("/audio/:id", keyMiddleware, ProtectedRoute(), getAudioByID(db))
 	router.Get("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), getAudioByAlert(db))
 	router.Get("/me/audio", keyMiddleware, ProtectedRoute(), getMyAudio(db))
