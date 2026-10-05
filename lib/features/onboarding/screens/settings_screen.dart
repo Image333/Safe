@@ -1,7 +1,12 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/services/app_reset_service.dart';
+import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/storage/camouflage_storage.dart';
 import '../../../core/theme/app_theme.dart';
 
@@ -14,20 +19,37 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _camouflageStorage = CamouflageStorage();
   final _camouflageService = AppCamouflageService();
+  final _voiceTriggerService = VoiceTriggerService();
+  final _keywordController = TextEditingController();
+  static const int _voiceDurationStepSec = 5;
 
   // États des paramètres
   bool _camouflageEnabled = false;
   bool _vibrationConfirm  = true;
   bool _offlineMode       = true;
   String _selectedTrigger = 'volume';
+  bool _voiceTriggerArmed = false;
+  int _voiceRecordingDurationSec = VoiceTriggerService.defaultRecordingDurationSec;
   String _camouflageApp   = 'meteo';
-  bool _isLoggedIn        = false;
-  String _userEmail       = '';
+  bool _isRefreshingVoice = false;
+
+  // Configuration de la plage horaire
+  bool _scheduleEnabled = false;
+  TimeOfDay _scheduleStartTime = const TimeOfDay(hour: 22, minute: 0);
+  TimeOfDay _scheduleEndTime = const TimeOfDay(hour: 7, minute: 0);
+  List<int> _scheduleDays = [0, 1, 2, 3, 4, 5, 6]; // Tous les jours par défaut
 
   @override
   void initState() {
     super.initState();
     _loadCamouflageSettings();
+    _loadVoiceTriggerSettings();
+  }
+
+  @override
+  void dispose() {
+    _keywordController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadCamouflageSettings() async {
@@ -47,6 +69,326 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       await _camouflageService.disableCalculatorCamouflage();
     }
+  }
+
+  Future<void> _loadVoiceTriggerSettings() async {
+    final config = await _voiceTriggerService.getConfig();
+    if (!mounted) return;
+
+    setState(() {
+      _voiceTriggerArmed = config.armed;
+      _voiceRecordingDurationSec = config.recordingDurationSec;
+      _keywordController.text = config.keyword ?? '';
+      if (_voiceTriggerArmed || (config.keyword != null && config.keyword!.isNotEmpty)) {
+        _selectedTrigger = 'keyword';
+      }
+      
+      // Charger la configuration de plage horaire
+      if (config.schedule != null) {
+        _scheduleEnabled = config.schedule!.enabled;
+        _scheduleStartTime = TimeOfDay(
+          hour: config.schedule!.startHour,
+          minute: config.schedule!.startMinute,
+        );
+        _scheduleEndTime = TimeOfDay(
+          hour: config.schedule!.endHour,
+          minute: config.schedule!.endMinute,
+        );
+        _scheduleDays = List.from(config.schedule!.days);
+      }
+    });
+  }
+
+  Future<void> _onVoiceTriggerArmedChanged(bool armed) async {
+    try {
+      final keyword = _keywordController.text.trim();
+      if (armed) {
+        if (keyword.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Renseignez un mot-clé avant d\'activer.')),
+          );
+          return;
+        }
+
+        final granted = await _confirmAndRequestMicrophonePermission();
+        if (!mounted || !granted) return;
+
+        // Demander aussi la permission de reconnaissance vocale sur iOS
+        if (Platform.isIOS) {
+          final speechGranted = await _confirmAndRequestSpeechPermission();
+          if (!mounted || !speechGranted) return;
+        }
+
+        await _persistVoiceConfig(keyword: keyword);
+        await _voiceTriggerService.arm();
+      } else {
+        await _voiceTriggerService.disarm();
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _voiceTriggerArmed = armed;
+        _selectedTrigger = armed ? 'keyword' : _selectedTrigger;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('StateError: ', ''))),
+      );
+    }
+  }
+
+  Future<bool> _confirmAndRequestSpeechPermission() async {
+    // Vérifier si déjà accordée
+    final alreadyGranted = await _voiceTriggerService.checkSpeechPermission();
+    if (alreadyGranted) return true;
+
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Autorisation reconnaissance vocale'),
+        content: const Text(
+          'Pour détecter votre mot-clé même lorsque l\'écran est verrouillé, '
+          'Safe a besoin d\'accéder à la reconnaissance vocale.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Autoriser'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRequest != true || !mounted) return false;
+
+    final granted = await _voiceTriggerService.requestSpeechPermission();
+    if (granted) return true;
+
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Autorisez la reconnaissance vocale dans les réglages.'),
+        action: SnackBarAction(
+          label: 'Réglages',
+          onPressed: openAppSettings,
+        ),
+      ),
+    );
+
+    return false;
+  }
+
+  Future<void> _saveKeywordOnly() async {
+    final keyword = _keywordController.text.trim();
+    if (keyword.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Le mot-clé ne peut pas être vide.')),
+      );
+      return;
+    }
+
+    await _persistVoiceConfig(keyword: keyword);
+
+    if (Platform.isIOS) {
+      final granted = await _ensureMicrophonePermissionForIos();
+      if (!mounted) return;
+
+      if (!granted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Autorisez le micro pour utiliser le déclencheur vocal.'),
+            action: SnackBarAction(
+              label: 'Réglages',
+              onPressed: openAppSettings,
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Mot-clé enregistré.')),
+    );
+  }
+
+  Future<bool> _ensureMicrophonePermissionForIos() async {
+    var status = await Permission.microphone.status;
+    if (status.isGranted) return true;
+
+    status = await Permission.microphone.request();
+    return status.isGranted;
+  }
+
+  Future<bool> _confirmAndRequestMicrophonePermission() async {
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Autorisation micro'),
+        content: const Text(
+          'Pour activer le mot-clé vocal, Safe a besoin d\'accéder au microphone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Autoriser'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRequest != true || !mounted) return false;
+
+    final status = await Permission.microphone.request();
+    if (status.isGranted) return true;
+
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Autorisez le micro pour activer le mot-clé vocal.'),
+        action: SnackBarAction(
+          label: 'Réglages',
+          onPressed: openAppSettings,
+        ),
+      ),
+    );
+
+    return false;
+  }
+
+  Future<void> _persistVoiceConfig({String? keyword}) async {
+    final safeKeyword = (keyword ?? _keywordController.text).trim();
+    await _voiceTriggerService.saveConfig(
+      keyword: safeKeyword,
+      recordingDurationSec: _voiceRecordingDurationSec,
+    );
+
+    // Sauvegarder aussi la configuration de plage horaire
+    await _voiceTriggerService.saveSchedule(
+      enabled: _scheduleEnabled,
+      startHour: _scheduleStartTime.hour,
+      startMinute: _scheduleStartTime.minute,
+      endHour: _scheduleEndTime.hour,
+      endMinute: _scheduleEndTime.minute,
+      days: _scheduleDays,
+    );
+
+    if (_voiceTriggerArmed) {
+      await _voiceTriggerService.disarm();
+      await _voiceTriggerService.arm();
+    }
+  }
+
+  Future<void> _onScheduleEnabledChanged(bool enabled) async {
+    setState(() => _scheduleEnabled = enabled);
+    await _persistVoiceConfig();
+  }
+
+  Future<void> _selectScheduleStartTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _scheduleStartTime,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.navy,
+              onSurface: AppColors.gray,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && mounted) {
+      setState(() => _scheduleStartTime = picked);
+      await _persistVoiceConfig();
+    }
+  }
+
+  Future<void> _selectScheduleEndTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _scheduleEndTime,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.navy,
+              onSurface: AppColors.gray,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && mounted) {
+      setState(() => _scheduleEndTime = picked);
+      await _persistVoiceConfig();
+    }
+  }
+
+  void _toggleScheduleDay(int day) async {
+    setState(() {
+      if (_scheduleDays.contains(day)) {
+        _scheduleDays.remove(day);
+      } else {
+        _scheduleDays.add(day);
+      }
+    });
+    await _persistVoiceConfig();
+  }
+
+  String _formatTimeOfDay(TimeOfDay time) {
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _setVoiceRecordingDuration(int seconds) async {
+    final clamped = (seconds / _voiceDurationStepSec).round() * _voiceDurationStepSec;
+    final bounded = clamped
+        .clamp(
+          VoiceTriggerService.minRecordingDurationSec,
+          VoiceTriggerService.maxRecordingDurationSec,
+        )
+        .toInt();
+
+    if (bounded == _voiceRecordingDurationSec) return;
+
+    setState(() => _voiceRecordingDurationSec = bounded);
+
+    final keyword = _keywordController.text.trim();
+    if (keyword.isEmpty) return;
+
+    try {
+      await _persistVoiceConfig(keyword: keyword);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Impossible de mettre à jour la durée.')),
+      );
+    }
+  }
+
+  String _formatDuration(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final minutes = seconds ~/ 60;
+    final remaining = seconds % 60;
+    if (remaining == 0) return '${minutes}min';
+    return '${minutes}min ${remaining}s';
   }
 
   @override
@@ -83,6 +425,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                 _buildSection('Déclencheur', [
                   _buildTriggerSelector(),
+                  if (_selectedTrigger == 'keyword') _buildKeywordTriggerSettings(),
                 ]),
 
                 _buildSection('Camouflage', [
@@ -110,6 +453,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ]),
 
                 _buildSection('Sécurité', [
+                  _buildNavTile(
+                    icon: Icons.history,
+                    iconBg: AppColors.blueLight,
+                    iconColor: AppColors.blue,
+                    title: 'Historique audio',
+                    subtitle: 'Consulter vos enregistrements',
+                    onTap: () => Navigator.pushNamed(context, AppRouter.audioHistory),
+                  ),
                   _buildNavTile(
                     icon: Icons.calculate_outlined,
                     iconBg: AppColors.blueLight,
@@ -281,19 +632,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final options = [
       (value: 'volume',  icon: Icons.volume_down_outlined, label: '3× bouton volume'),
       (value: 'shake',   icon: Icons.vibration,            label: 'Secouer'),
+      (value: 'keyword', icon: Icons.mic_none_outlined,    label: 'Mot-clé vocal'),
     ];
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('Mode de déclenchement', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.gray)),
         const SizedBox(height: 12),
-        Row(children: options.map((o) {
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: options.map((o) {
           final selected = _selectedTrigger == o.value;
-          return Expanded(child: GestureDetector(
+          return SizedBox(
+            width: (MediaQuery.of(context).size.width - 72) / 2,
+            child: GestureDetector(
             onTap: () => setState(() => _selectedTrigger = o.value),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              margin: EdgeInsets.only(right: o.value == 'volume' ? 8 : 0),
               padding: const EdgeInsets.symmetric(vertical: 12),
               decoration: BoxDecoration(
                 color: selected ? AppColors.blueLight : AppColors.grayLight,
@@ -306,10 +662,472 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(o.label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: selected ? AppColors.blue : AppColors.grayMid), textAlign: TextAlign.center),
               ]),
             ),
-          ));
-        }).toList()),
+            ),
+          );
+        }).toList(),
+        ),
       ]),
     );
+  }
+
+  Widget _buildKeywordTriggerSettings() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.grayLight,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Déclencheur vocal (bêta)',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: AppColors.navy,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Fonctionne en arrière-plan. iOS nécessite le mode audio actif.',
+              style: TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _keywordController,
+              decoration: const InputDecoration(
+                labelText: 'Mot-clé',
+                hintText: 'Ex: j\'ai oublié mes clés',
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Durée du clip après détection',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.gray,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [15, 30, 60, 120].map((value) {
+                final selected = _voiceRecordingDurationSec == value;
+                return ChoiceChip(
+                  label: Text(_formatDuration(value)),
+                  selected: selected,
+                  onSelected: (_) => _setVoiceRecordingDuration(value),
+                  selectedColor: AppColors.blueLight,
+                  labelStyle: TextStyle(
+                    color: selected ? AppColors.blue : AppColors.grayMid,
+                    fontWeight: FontWeight.w600,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            Slider(
+              value: _voiceRecordingDurationSec.toDouble(),
+              min: VoiceTriggerService.minRecordingDurationSec.toDouble(),
+              max: VoiceTriggerService.maxRecordingDurationSec.toDouble(),
+              divisions: (VoiceTriggerService.maxRecordingDurationSec -
+                  VoiceTriggerService.minRecordingDurationSec) ~/
+                  _voiceDurationStepSec,
+              label: _formatDuration(_voiceRecordingDurationSec),
+              activeColor: AppColors.navy,
+              onChanged: (value) => _setVoiceRecordingDuration(value.round()),
+            ),
+            Text(
+              'Actuel: ${_formatDuration(_voiceRecordingDurationSec)} (max ${_formatDuration(VoiceTriggerService.maxRecordingDurationSec)})',
+              style: const TextStyle(fontSize: 12, color: AppColors.grayMid),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saveKeywordOnly,
+                    child: const Text('Enregistrer le mot-clé'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Switch(
+                  value: _voiceTriggerArmed,
+                  onChanged: _onVoiceTriggerArmedChanged,
+                  activeColor: AppColors.navy,
+                ),
+              ],
+            ),
+            Text(
+              _voiceTriggerArmed
+                  ? 'Surveillance armée • clip ${_formatDuration(_voiceRecordingDurationSec)}'
+                  : 'Surveillance désactivée',
+              style: TextStyle(
+                fontSize: 12,
+                color: _voiceTriggerArmed ? AppColors.green : AppColors.grayMid,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (_voiceTriggerArmed) ...[
+              const SizedBox(height: 12),
+              _buildListeningIndicator(),
+            ],
+            const SizedBox(height: 16),
+            _buildScheduleSettings(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildListeningIndicator() {
+    final speechService = _voiceTriggerService.speechService;
+    final flutterListening = speechService.isListening;
+    final flutterInitialized = speechService.isInitialized;
+    
+    // Vérifier le statut natif iOS : on distingue l'écoute "armée" (isListening)
+    // de l'écoute réellement active sur le micro (isActivelyListening).
+    return FutureBuilder<List<bool>>(
+      future: Platform.isIOS
+          ? Future.wait([
+              _voiceTriggerService.isNativeListening(),
+              _voiceTriggerService.isNativeActivelyListening(),
+            ])
+          : Future.value(const [false, false]),
+      builder: (context, nativeSnapshot) {
+        final nativeArmed = nativeSnapshot.data?[0] ?? false;
+        final nativeActive = nativeSnapshot.data?[1] ?? false;
+        // "Écoute en cours" = micro réellement capté (natif actif ou Flutter en écoute).
+        final isListening = flutterListening || nativeActive;
+        // "Armé mais suspendu" = moteur armé mais hors plage horaire.
+        final isSuspended = !isListening && (nativeArmed || flutterInitialized);
+        final isInitialized = flutterInitialized || nativeArmed;
+        
+        debugPrint('🔍 Indicator: flutterInit=$flutterInitialized, flutterListen=$flutterListening, nativeArmed=$nativeArmed, nativeActive=$nativeActive');
+    
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isListening ? AppColors.greenLight : AppColors.orangeL,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          // Indicateur animé
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: isListening ? AppColors.green : AppColors.orange,
+              shape: BoxShape.circle,
+            ),
+            child: isListening
+                ? const _PulsingDot()
+                : null,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isListening 
+                      ? '🎤 Écoute en cours${nativeActive ? " (natif iOS)" : " (Flutter)"}...'
+                      : isSuspended
+                          ? '⏸️ Armé mais suspendu (hors plage horaire)'
+                          : isInitialized 
+                              ? '⏸️ En pause'
+                              : '⚠️ Service non initialisé',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isListening ? AppColors.green : AppColors.orange,
+                  ),
+                ),
+                Text(
+                  'Flutter: init=$flutterInitialized listen=$flutterListening • Natif: armé=$nativeArmed actif=$nativeActive',
+                  style: const TextStyle(fontSize: 10, color: AppColors.grayMid),
+                ),
+              ],
+            ),
+          ),
+          // Bouton de test
+          _isRefreshingVoice
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : IconButton(
+                  onPressed: _testSpeechRecognition,
+                  icon: const Icon(Icons.refresh, size: 20),
+                  color: AppColors.navy,
+                  tooltip: 'Relancer l\'écoute',
+                ),
+        ],
+      ),
+    );
+      },
+    );
+  }
+
+  Future<void> _testSpeechRecognition() async {
+    if (_isRefreshingVoice) return;
+    
+    setState(() => _isRefreshingVoice = true);
+    
+    try {
+      // Désarmer puis réarmer pour forcer le redémarrage
+      if (_voiceTriggerArmed) {
+        debugPrint('🔄 Refresh: Désarmement...');
+        await _voiceTriggerService.disarm();
+        await Future.delayed(const Duration(milliseconds: 300));
+        
+        debugPrint('🔄 Refresh: Réarmement...');
+        await _voiceTriggerService.arm();
+        
+        debugPrint('🔄 Refresh: Terminé!');
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('🎤 Écoute relancée - Dites votre mot-clé pour tester'),
+              backgroundColor: AppColors.green,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        // Si pas armé, on arme directement
+        debugPrint('🔄 Refresh: Armement initial...');
+        await _voiceTriggerService.arm();
+        setState(() => _voiceTriggerArmed = true);
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('🎤 Écoute activée - Dites votre mot-clé'),
+              backgroundColor: AppColors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Refresh error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur: $e'),
+            backgroundColor: AppColors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingVoice = false);
+      }
+    }
+  }
+
+  Widget _buildScheduleSettings() {
+    const dayLabels = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
+    
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.schedule,
+                    size: 20,
+                    color: _scheduleEnabled ? AppColors.navy : AppColors.grayMid,
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Plage horaire',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.navy,
+                    ),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _scheduleEnabled,
+                onChanged: _onScheduleEnabledChanged,
+                activeColor: AppColors.navy,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _scheduleEnabled 
+                ? 'L\'écoute vocale est active uniquement pendant cette plage.'
+                : 'L\'écoute vocale est active 24h/24.',
+            style: const TextStyle(fontSize: 12, color: AppColors.grayMid),
+          ),
+          if (_scheduleEnabled) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildTimeSelector(
+                    label: 'Début',
+                    time: _scheduleStartTime,
+                    onTap: _selectScheduleStartTime,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                const Icon(Icons.arrow_forward, color: AppColors.grayMid, size: 20),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildTimeSelector(
+                    label: 'Fin',
+                    time: _scheduleEndTime,
+                    onTap: _selectScheduleEndTime,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Jours actifs',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.gray,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: List.generate(7, (index) {
+                final isSelected = _scheduleDays.contains(index);
+                return GestureDetector(
+                  onTap: () => _toggleScheduleDay(index),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: isSelected ? AppColors.navy : AppColors.grayLight,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text(
+                        dayLabels[index],
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isSelected ? AppColors.white : AppColors.grayMid,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.blueLight,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, size: 18, color: AppColors.blue),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _getScheduleSummary(),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.blue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimeSelector({
+    required String label,
+    required TimeOfDay time,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        decoration: BoxDecoration(
+          color: AppColors.blueLight,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.blue.withOpacity(0.3)),
+        ),
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: AppColors.grayMid,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _formatTimeOfDay(time),
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: AppColors.navy,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getScheduleSummary() {
+    if (_scheduleDays.isEmpty) {
+      return 'Aucun jour sélectionné';
+    }
+
+    final startStr = _formatTimeOfDay(_scheduleStartTime);
+    final endStr = _formatTimeOfDay(_scheduleEndTime);
+    
+    if (_scheduleDays.length == 7) {
+      return 'Actif tous les jours de $startStr à $endStr';
+    }
+
+    const dayNames = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
+    final selectedDays = _scheduleDays.map((d) => dayNames[d]).join(', ');
+    
+    return 'Actif $selectedDays de $startStr à $endStr';
   }
 
   // ── Camouflage selector ───────────────────────────────────────────────────
@@ -398,13 +1216,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           ElevatedButton(
             onPressed: () {
-              setState(() { _isLoggedIn = false; _userEmail = ''; });
+              // TODO: Implémenter la déconnexion réelle
               Navigator.pop(context);
             },
             child: const Text('Se déconnecter'),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Widget animé pour indiquer que l'écoute est active
+class _PulsingDot extends StatefulWidget {
+  const _PulsingDot();
+
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1000),
+      vsync: this,
+    )..repeat(reverse: true);
+    
+    _animation = Tween<double>(begin: 0.4, end: 1.0).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, child) {
+        return Opacity(
+          opacity: _animation.value,
+          child: Container(
+            width: 12,
+            height: 12,
+            decoration: const BoxDecoration(
+              color: AppColors.green,
+              shape: BoxShape.circle,
+            ),
+          ),
+        );
+      },
     );
   }
 }

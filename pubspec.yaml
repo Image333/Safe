@@ -24,8 +24,23 @@ dependencies:
   # UI
   google_fonts: ^6.2.1
 
+  # HTTP client
+  http: ^1.2.0
+
+  # Stockage objet S3 / MinIO
+  minio: ^3.5.7
+
   # Permissions (micro, caméra, GPS)
   permission_handler: ^11.3.1
+
+  # Enregistrement audio local
+  record: ^6.0.0
+  path_provider: ^2.1.5
+  volume_watcher: ^2.0.1
+  just_audio: ^0.9.0
+
+  # Reconnaissance vocale (utilise les APIs natives Apple/Google)
+  speech_to_text: ^6.6.0
 
   # Icônes
   flutter_svg: ^2.0.10+1
@@ -41,6 +56,8 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.4
 
 flutter:
+  config:
+    enable-swift-package-manager: false
   uses-material-design: true
   assets:
     - assets/images/
@@ -50,5 +67,5 @@ flutter_launcher_icons:
   android: true
   ios: false
   image_path: assets/icons/calculator_app_icon.png
-  adaptive_icon_background: "#3A3A3C"
+  adaptive_icon_background: "#1C1C1E"
   adaptive_icon_foreground: assets/icons/calculator_app_icon.png
