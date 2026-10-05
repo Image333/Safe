@@ -40,6 +40,7 @@ class SpeechRecognitionService {
 
   bool get isInitialized => _isInitialized;
   bool get isListening => _isListening;
+  int get recordingDurationSec => _recordingDurationSec;
 
   /// Initialise le service de reconnaissance vocale
   Future<bool> initialize() async {

@@ -8,12 +8,19 @@ final class VoiceTriggerManager: NSObject {
     
     // MARK: - Configuration
     private var keyword: String = ""
-    private var recordingDurationSec: Int = 15
+    private(set) var recordingDurationSec: Int = 15
     private var scheduleConfig: ScheduleConfig?
     
     // MARK: - State
     private(set) var isListening = false
     private(set) var isRecording = false
+
+    /// `true` uniquement quand le moteur capte réellement le micro
+    /// (moteur audio en marche ou tâche de reconnaissance active). Diffère de
+    /// `isListening` qui reste vrai même lorsque l'écoute est suspendue hors plage.
+    var isActivelyRecognizing: Bool {
+        return (audioEngine?.isRunning ?? false) || recognitionTask != nil
+    }
     
     // MARK: - Audio Components
     private var audioEngine: AVAudioEngine?
@@ -71,10 +78,15 @@ final class VoiceTriggerManager: NSObject {
     }
     
     func startListening() throws {
-        guard !isListening else { return }
+        guard !isListening else {
+            print("🔍 VoiceTrigger: Déjà en écoute, ignoré")
+            return
+        }
         guard !keyword.isEmpty else {
+            print("❌ VoiceTrigger: Pas de mot-clé configuré!")
             throw VoiceTriggerError.noKeyword
         }
+        print("🔍 VoiceTrigger: startListening() - keyword='\(keyword)', duration=\(recordingDurationSec)s")
         
         // Vérifier les permissions
         try checkPermissions()
@@ -83,8 +95,12 @@ final class VoiceTriggerManager: NSObject {
         try configureAudioSession()
         
         // Démarrer l'écoute si dans la plage horaire
-        if isWithinSchedule() {
+        let within = isWithinSchedule()
+        print("🔍 VoiceTrigger: isWithinSchedule=\(within) au démarrage")
+        if within {
             try startSpeechRecognition()
+        } else {
+            print("⏸️ VoiceTrigger: hors plage horaire au démarrage, écoute suspendue")
         }
         
         // Démarrer le timer de vérification de plage horaire
@@ -151,6 +167,7 @@ final class VoiceTriggerManager: NSObject {
         
         // Vérifier si le jour est dans la liste
         guard schedule.days.contains(weekday) else {
+            print("🔍 Schedule: jour \(weekday) absent de \(schedule.days) → hors plage")
             return false
         }
         
@@ -161,6 +178,7 @@ final class VoiceTriggerManager: NSObject {
         
         let startMinutes = schedule.startHour * 60 + schedule.startMinute
         let endMinutes = schedule.endHour * 60 + schedule.endMinute
+        print("🔍 Schedule: now=\(hour):\(minute) (\(currentMinutes)min) plage=\(schedule.startHour):\(schedule.startMinute)-\(schedule.endHour):\(schedule.endMinute)")
         
         // Gérer le cas où la plage traverse minuit
         if startMinutes > endMinutes {
@@ -190,11 +208,12 @@ final class VoiceTriggerManager: NSObject {
     
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
+        print("🔍 VoiceTrigger: configureAudioSession() - category actuelle: \(session.category.rawValue), mode: \(session.mode.rawValue)")
         
         try session.setCategory(
             .playAndRecord,
-            mode: .measurement,
-            options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers, .duckOthers]
+            mode: .default,
+            options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
         )
         
         try session.setActive(true, options: .notifyOthersOnDeactivation)
@@ -203,7 +222,9 @@ final class VoiceTriggerManager: NSObject {
     // MARK: - Speech Recognition
     
     private func startSpeechRecognition() throws {
+        print("🔍 VoiceTrigger: startSpeechRecognition() - recognizer=\(speechRecognizer != nil), available=\(speechRecognizer?.isAvailable ?? false)")
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            print("❌ VoiceTrigger: SFSpeechRecognizer non disponible!")
             throw VoiceTriggerError.speechRecognizerUnavailable
         }
         
@@ -258,8 +279,9 @@ final class VoiceTriggerManager: NSObject {
     
     private func handleRecognitionResult(result: SFSpeechRecognitionResult?, error: Error?) {
         if let error = error {
-            // Si c'est une erreur de timeout ou d'arrêt normal, redémarrer
             let nsError = error as NSError
+            print("⚠️ VoiceTrigger: Erreur reconnaissance - domain=\(nsError.domain) code=\(nsError.code) desc=\(nsError.localizedDescription)")
+            // Si c'est une erreur de timeout ou d'arrêt normal, redémarrer
             if nsError.domain == "kAFAssistantErrorDomain" {
                 // Redémarrer l'écoute après une courte pause
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -299,7 +321,11 @@ final class VoiceTriggerManager: NSObject {
     // MARK: - Recording
     
     private func triggerRecording() {
-        guard !isRecording else { return }
+        print("🔍 VoiceTrigger: triggerRecording() appelé - isRecording=\(isRecording)")
+        guard !isRecording else {
+            print("⚠️ VoiceTrigger: Déjà en enregistrement, ignoré")
+            return
+        }
         
         // Arrêter temporairement la reconnaissance pour enregistrer
         stopSpeechRecognition()

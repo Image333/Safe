@@ -16,10 +16,13 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   bool _isProtected = false;
   bool _alertSent = false;
   bool _isRecordingClip = false;
+  bool _voiceArmed = false;
+  bool _voiceActive = false;
   String? _lastClipPath;
   int _audioClipsCount = 0;
   bool _isAuthenticated = true; // masqué par défaut le temps du check
@@ -80,6 +83,74 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     _loadAudioClipsCount();
     _checkAuthStatus();
+    _bindVoiceTriggerCallbacks();
+    WidgetsBinding.instance.addObserver(this);
+    _loadVoiceState();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadVoiceState();
+      _loadAudioClipsCount();
+    }
+  }
+
+  /// Recharge l'état de la surveillance vocale (armée + micro réellement actif)
+  /// pour synchroniser la bannière d'accueil avec les réglages et le natif iOS.
+  Future<void> _loadVoiceState() async {
+    final config = await _voiceTriggerService.getConfig();
+    bool active = false;
+    if (config.armed) {
+      active = await _voiceTriggerService.isNativeActivelyListening();
+      active = active || _voiceTriggerService.speechService.isListening;
+    }
+    if (!mounted) return;
+    setState(() {
+      _voiceArmed = config.armed;
+      _voiceActive = active;
+    });
+  }
+
+  /// Synchronise l'état de l'accueil avec le moteur vocal : quand le mot-clé
+  /// déclenche un enregistrement, on rafraîchit le compteur et on informe l'user.
+  void _bindVoiceTriggerCallbacks() {
+    _voiceTriggerService.onRecordingStarted = () {
+      if (!mounted) return;
+      setState(() => _isRecordingClip = true);
+    };
+    _voiceTriggerService.onRecordingSynced = (filePath, syncResult) async {
+      if (!mounted) return;
+      setState(() {
+        _isRecordingClip = false;
+        _lastClipPath = filePath;
+      });
+      await _loadAudioClipsCount();
+      await _loadVoiceState();
+      if (!mounted) return;
+
+      final message = syncResult.uploaded
+          ? 'Mot-clé détecté • clip synchronisé.'
+          : syncResult.errorMessage != null
+              ? 'Mot-clé détecté • clip local (sync: ${syncResult.errorMessage}).'
+              : 'Mot-clé détecté • clip enregistré.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor:
+              syncResult.uploaded ? AppColors.green : AppColors.navy,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: Text(
+            message,
+            style: const TextStyle(color: AppColors.white),
+          ),
+        ),
+      );
+    };
+    _voiceTriggerService.onError = (msg) {
+      if (!mounted) return;
+      setState(() => _isRecordingClip = false);
+    };
   }
 
   Future<void> _checkAuthStatus() async {
@@ -96,6 +167,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pulseController1.dispose();
     _pulseController2.dispose();
     _pressController.dispose();
@@ -418,37 +490,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ── Bannière statut ───────────────────────────────────────────────────────
   Widget _buildStatusBanner() {
+    // La protection est active si le trigger volume OU la surveillance vocale l'est.
+    final bool isActive = _isProtected || _voiceArmed;
+    final String title = isActive ? 'Protection active' : 'Protection désactivée';
+    final String subtitle = !isActive
+        ? 'Appuyez pour activer la protection'
+        : _voiceArmed
+            ? (_voiceActive
+                ? '🎤 Écoute du mot-clé en cours'
+                : '⏸️ Mot-clé armé (suspendu hors plage horaire)')
+            : 'Safe fonctionne en arrière-plan';
     return AnimatedContainer(
       duration: const Duration(milliseconds: 400),
       margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: _isProtected ? AppColors.greenLight : AppColors.redLight,
+        color: isActive ? AppColors.greenLight : AppColors.redLight,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: _isProtected ? AppColors.green.withOpacity(0.4) : AppColors.red.withOpacity(0.4),
+          color: isActive ? AppColors.green.withOpacity(0.4) : AppColors.red.withOpacity(0.4),
         ),
       ),
       child: Row(children: [
         Icon(
-          _isProtected ? Icons.shield : Icons.shield_outlined,
-          color: _isProtected ? AppColors.green : AppColors.red,
+          isActive ? Icons.shield : Icons.shield_outlined,
+          color: isActive ? AppColors.green : AppColors.red,
           size: 20,
         ),
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(
-            _isProtected ? 'Protection active' : 'Protection désactivée',
+            title,
             style: TextStyle(
               fontSize: 14, fontWeight: FontWeight.w700,
-              color: _isProtected ? AppColors.green : AppColors.red,
+              color: isActive ? AppColors.green : AppColors.red,
             ),
           ),
           Text(
-            _isProtected
-              ? 'Safe fonctionne en arrière-plan'
-              : 'Appuyez pour activer la protection',
-            style: TextStyle(fontSize: 12, color: (_isProtected ? AppColors.green : AppColors.red).withOpacity(0.8)),
+            subtitle,
+            style: TextStyle(fontSize: 12, color: (isActive ? AppColors.green : AppColors.red).withOpacity(0.8)),
           ),
         ])),
         Switch(

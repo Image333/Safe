@@ -788,8 +788,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildListeningIndicator() {
     final speechService = _voiceTriggerService.speechService;
-    final isListening = speechService.isListening;
-    final isInitialized = speechService.isInitialized;
+    final flutterListening = speechService.isListening;
+    final flutterInitialized = speechService.isInitialized;
+    
+    // Vérifier le statut natif iOS : on distingue l'écoute "armée" (isListening)
+    // de l'écoute réellement active sur le micro (isActivelyListening).
+    return FutureBuilder<List<bool>>(
+      future: Platform.isIOS
+          ? Future.wait([
+              _voiceTriggerService.isNativeListening(),
+              _voiceTriggerService.isNativeActivelyListening(),
+            ])
+          : Future.value(const [false, false]),
+      builder: (context, nativeSnapshot) {
+        final nativeArmed = nativeSnapshot.data?[0] ?? false;
+        final nativeActive = nativeSnapshot.data?[1] ?? false;
+        // "Écoute en cours" = micro réellement capté (natif actif ou Flutter en écoute).
+        final isListening = flutterListening || nativeActive;
+        // "Armé mais suspendu" = moteur armé mais hors plage horaire.
+        final isSuspended = !isListening && (nativeArmed || flutterInitialized);
+        final isInitialized = flutterInitialized || nativeArmed;
+        
+        debugPrint('🔍 Indicator: flutterInit=$flutterInitialized, flutterListen=$flutterListening, nativeArmed=$nativeArmed, nativeActive=$nativeActive');
     
     return Container(
       padding: const EdgeInsets.all(10),
@@ -818,10 +838,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(
                   isListening 
-                      ? '🎤 Écoute en cours...'
-                      : isInitialized 
-                          ? '⏸️ En pause (hors plage horaire ?)'
-                          : '⚠️ Service non initialisé',
+                      ? '🎤 Écoute en cours${nativeActive ? " (natif iOS)" : " (Flutter)"}...'
+                      : isSuspended
+                          ? '⏸️ Armé mais suspendu (hors plage horaire)'
+                          : isInitialized 
+                              ? '⏸️ En pause'
+                              : '⚠️ Service non initialisé',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -829,7 +851,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 Text(
-                  'Init: $isInitialized • Écoute: $isListening',
+                  'Flutter: init=$flutterInitialized listen=$flutterListening • Natif: armé=$nativeArmed actif=$nativeActive',
                   style: const TextStyle(fontSize: 10, color: AppColors.grayMid),
                 ),
               ],
@@ -850,6 +872,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
         ],
       ),
+    );
+      },
     );
   }
 

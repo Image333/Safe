@@ -7,6 +7,8 @@ import Speech
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var voiceTriggerMethodChannel: FlutterMethodChannel?
+  private var voiceTriggerEventChannel: FlutterEventChannel?
+  private let voiceTriggerEventStreamHandler = VoiceTriggerEventStreamHandler()
   private var volumeButtonDetector: VolumeButtonDetector?
   private var volumeButtonEventChannel: FlutterEventChannel?
 
@@ -29,6 +31,7 @@ import Speech
     if let registrar = pluginRegistry.registrar(forPlugin: "VoiceTriggerChannel") {
       let messenger = registrar.messenger()
       setUpVoiceTriggerChannel(binaryMessenger: messenger)
+      setUpVoiceTriggerEventChannel(binaryMessenger: messenger)
       setUpVolumeButtonChannel(binaryMessenger: messenger)
     }
   }
@@ -36,25 +39,45 @@ import Speech
   private func setupVoiceTriggerCallbacks() {
     let manager = VoiceTriggerManager.shared
     
-    manager.onKeywordDetected = {
+    manager.onKeywordDetected = { [weak self] in
       print("🚨 iOS: Mot-clé détecté - déclenchement enregistrement")
       // Vibration haptique pour confirmer
       let generator = UINotificationFeedbackGenerator()
       generator.notificationOccurred(.warning)
+      self?.voiceTriggerEventStreamHandler.send(["event": "keyword_detected"])
     }
     
-    manager.onRecordingStarted = {
+    manager.onRecordingStarted = { [weak self] in
       print("🔴 iOS: Enregistrement d'urgence démarré")
+      self?.voiceTriggerEventStreamHandler.send(["event": "recording_started"])
     }
     
-    manager.onRecordingFinished = { url in
+    manager.onRecordingFinished = { [weak self] url in
       print("⬛ iOS: Enregistrement sauvegardé: \(url.path)")
-      // TODO: Notifier Flutter pour mettre à jour l'historique
+      // Remonter le clip à Flutter pour upload MinIO + POST /alerts/:id/audio
+      self?.voiceTriggerEventStreamHandler.send([
+        "event": "recording_completed",
+        "filePath": url.path,
+        "durationSec": manager.recordingDurationSec,
+      ])
     }
     
-    manager.onError = { error in
+    manager.onError = { [weak self] error in
       print("⚠️ iOS: Erreur VoiceTrigger: \(error.localizedDescription)")
+      self?.voiceTriggerEventStreamHandler.send([
+        "event": "error",
+        "message": error.localizedDescription,
+      ])
     }
+  }
+
+  private func setUpVoiceTriggerEventChannel(binaryMessenger: FlutterBinaryMessenger) {
+    let eventChannel = FlutterEventChannel(
+      name: "safe/voice_trigger_events",
+      binaryMessenger: binaryMessenger
+    )
+    eventChannel.setStreamHandler(voiceTriggerEventStreamHandler)
+    voiceTriggerEventChannel = eventChannel
   }
 
   private func setUpVolumeButtonChannel(binaryMessenger: FlutterBinaryMessenger) {
@@ -144,6 +167,9 @@ import Speech
         
       case "isListening":
         callback(manager.isListening)
+        
+      case "isActivelyListening":
+        callback(manager.isActivelyRecognizing)
         
       case "isRecording":
         callback(manager.isRecording)
@@ -319,5 +345,30 @@ private final class VolumeButtonDetector: NSObject, FlutterStreamHandler {
   /// Évite 0 et 1 : à ces bornes, un appui volume ne change plus `outputVolume`.
   private func sanitizedVolume(_ volume: Float) -> Float {
     min(max(volume, 0.05), 0.95)
+  }
+}
+
+// MARK: - Voice Trigger Event Stream Handler
+
+/// Relaye les événements du moteur vocal natif (détection, enregistrement,
+/// erreurs) vers Flutter via l'EventChannel `safe/voice_trigger_events`.
+final class VoiceTriggerEventStreamHandler: NSObject, FlutterStreamHandler {
+  private var eventSink: FlutterEventSink?
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    self.eventSink = events
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    self.eventSink = nil
+    return nil
+  }
+
+  /// Émet un événement vers Flutter (toujours sur le main thread).
+  func send(_ payload: [String: Any]) {
+    DispatchQueue.main.async { [weak self] in
+      self?.eventSink?(payload)
+    }
   }
 }

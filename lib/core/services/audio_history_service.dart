@@ -179,6 +179,39 @@ class AudioHistoryService {
     return clips.length;
   }
 
+  /// Importe un clip produit ailleurs (ex. moteur natif iOS qui écrit dans
+  /// `Documents/emergency_*.m4a`) vers le dossier d'historique local
+  /// (`safe_alerts/alert_<ms>.m4a`) pour qu'il soit visible et lisible.
+  /// Retourne le nouveau chemin, ou le chemin d'origine si l'import échoue.
+  Future<String> importExternalClip(String sourcePath) async {
+    try {
+      final source = File(sourcePath);
+      if (!await source.exists()) return sourcePath;
+
+      final tempDir = await getTemporaryDirectory();
+      final audioDir = Directory('${tempDir.path}/$_audioDirectory');
+      if (!await audioDir.exists()) {
+        await audioDir.create(recursive: true);
+      }
+
+      // Déjà dans le bon dossier → rien à faire.
+      if (sourcePath.contains('/$_audioDirectory/')) return sourcePath;
+
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final destPath = '${audioDir.path}/alert_$ts.m4a';
+      await source.copy(destPath);
+
+      // Nettoyer la source (best-effort).
+      try {
+        await source.delete();
+      } catch (_) {}
+
+      return destPath;
+    } catch (_) {
+      return sourcePath;
+    }
+  }
+
   /// Supprime tous les clips audio locaux (remote non supporté)
   Future<void> deleteAllClips() async {
     try {

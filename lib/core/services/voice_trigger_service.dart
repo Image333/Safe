@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -5,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../storage/voice_trigger_storage.dart';
+import 'audio_history_service.dart';
+import 'audio_sync_service.dart';
 import 'speech_recognition_service.dart';
 import 'background_keep_alive_service.dart';
 
@@ -51,6 +54,8 @@ class VoiceTriggerConfig {
 
 class VoiceTriggerService {
   static const MethodChannel _channel = MethodChannel('safe/voice_trigger');
+  static const EventChannel _eventChannel =
+      EventChannel('safe/voice_trigger_events');
 
   static const int defaultRecordingDurationSec =
       VoiceTriggerStorage.defaultRecordingDurationSec;
@@ -61,13 +66,109 @@ class VoiceTriggerService {
 
   final VoiceTriggerStorage _storage;
   final SpeechRecognitionService _speechService;
+  final AudioSyncService _audioSyncService;
+  final AudioHistoryService _audioHistoryService;
 
-  VoiceTriggerService({VoiceTriggerStorage? storage})
-      : _storage = storage ?? VoiceTriggerStorage(),
-        _speechService = SpeechRecognitionService();
+  StreamSubscription<dynamic>? _eventSubscription;
+
+  /// Callbacks optionnels pour que l'UI réagisse aux événements du moteur.
+  void Function()? onKeywordDetected;
+  void Function()? onRecordingStarted;
+  void Function(String filePath, AudioSyncResult syncResult)? onRecordingSynced;
+  void Function(String message)? onError;
+
+  VoiceTriggerService({
+    VoiceTriggerStorage? storage,
+    AudioSyncService? audioSyncService,
+    AudioHistoryService? audioHistoryService,
+  })  : _storage = storage ?? VoiceTriggerStorage(),
+        _audioSyncService = audioSyncService ?? AudioSyncService(),
+        _audioHistoryService = audioHistoryService ?? AudioHistoryService(),
+        _speechService = SpeechRecognitionService() {
+    _bindSpeechServiceCallbacks();
+    _listenToNativeEvents();
+  }
 
   /// Accès au service de reconnaissance vocale
   SpeechRecognitionService get speechService => _speechService;
+
+  /// Écoute les événements remontés par le moteur natif iOS.
+  void _listenToNativeEvents() {
+    if (!Platform.isIOS) return;
+    _eventSubscription ??= _eventChannel.receiveBroadcastStream().listen(
+      _handleNativeEvent,
+      onError: (Object e) => debugPrint('⚠️ VoiceTrigger event error: $e'),
+    );
+  }
+
+  void _handleNativeEvent(dynamic event) {
+    if (event is! Map) return;
+    final type = event['event'] as String?;
+    switch (type) {
+      case 'keyword_detected':
+        debugPrint('🚨 VoiceTrigger: mot-clé détecté (natif)');
+        onKeywordDetected?.call();
+        break;
+      case 'recording_started':
+        debugPrint('🔴 VoiceTrigger: enregistrement démarré (natif)');
+        onRecordingStarted?.call();
+        break;
+      case 'recording_completed':
+        final filePath = event['filePath'] as String?;
+        final durationSec = (event['durationSec'] as int?) ?? 0;
+        if (filePath != null && filePath.isNotEmpty) {
+          _syncRecordedClip(filePath, durationSec);
+        }
+        break;
+      case 'error':
+        final message = event['message'] as String? ?? 'Erreur inconnue';
+        debugPrint('⚠️ VoiceTrigger error (natif): $message');
+        onError?.call(message);
+        break;
+    }
+  }
+
+  /// Branche les callbacks du fallback Flutter (speech_to_text) pour que
+  /// les clips enregistrés côté Dart soient aussi synchronisés.
+  void _bindSpeechServiceCallbacks() {
+    _speechService.onKeywordDetected = () => onKeywordDetected?.call();
+    _speechService.onRecordingStarted = () => onRecordingStarted?.call();
+    _speechService.onRecordingFinished = (path) {
+      final durationSec = _speechService.recordingDurationSec;
+      _syncRecordedClip(path, durationSec);
+    };
+    _speechService.onError = (error) => onError?.call(error);
+  }
+
+  /// Upload MinIO + POST /alerts/:id/audio (ou conservation locale si hors-ligne).
+  Future<void> _syncRecordedClip(String filePath, int durationSec) async {
+    // Rendre le clip visible dans l'historique local (le moteur natif iOS écrit
+    // dans Documents/emergency_*.m4a, hors du dossier lu par l'historique).
+    final localPath = await _audioHistoryService.importExternalClip(filePath);
+    try {
+      final result = await _audioSyncService.syncEmergencyClip(
+        localFilePath: localPath,
+        durationSec: durationSec > 0 ? durationSec : 1,
+      );
+      if (result.uploaded) {
+        debugPrint('☁️ VoiceTrigger: clip synchronisé (audio_id=${result.audioId})');
+      } else {
+        debugPrint('💾 VoiceTrigger: clip conservé en local'
+            '${result.errorMessage != null ? " (${result.errorMessage})" : ""}');
+      }
+      onRecordingSynced?.call(localPath, result);
+    } catch (e) {
+      debugPrint('❌ VoiceTrigger: échec sync clip: $e');
+      onError?.call('Échec de la synchronisation du clip: $e');
+      onRecordingSynced?.call(localPath, AudioSyncResult.failed(e.toString()));
+    }
+  }
+
+  /// Libère les ressources (souscription EventChannel).
+  void dispose() {
+    _eventSubscription?.cancel();
+    _eventSubscription = null;
+  }
 
   Future<VoiceTriggerConfig> getConfig() async {
     final armed = await _storage.isArmed();
@@ -138,6 +239,17 @@ class VoiceTriggerService {
     final micStatus = await Permission.microphone.request();
     if (!micStatus.isGranted) {
       throw StateError('Permission micro refusée. Activez-la dans les réglages.');
+    }
+
+    // iOS: la reconnaissance vocale native exige aussi l'autorisation Speech,
+    // sinon startListening() échoue côté natif avant même d'activer le micro.
+    if (Platform.isIOS) {
+      final speechGranted = await requestSpeechPermission();
+      if (!speechGranted) {
+        throw StateError(
+          'Permission reconnaissance vocale refusée. Activez-la dans les réglages.',
+        );
+      }
     }
 
     await _storage.setArmed(true);
@@ -290,6 +402,16 @@ class VoiceTriggerService {
         return;
       }
 
+      // iOS: sans autorisation Speech, l'écoute native ne démarre pas.
+      if (Platform.isIOS) {
+        final speechGranted = await checkSpeechPermission();
+        if (!speechGranted) {
+          debugPrint('⚠️ Speech non autorisé au démarrage, désarmement');
+          await _storage.setArmed(false);
+          return;
+        }
+      }
+
       // Réarmer selon la plateforme (avec gestion d'erreur)
       if (Platform.isIOS) {
         try {
@@ -319,6 +441,42 @@ class VoiceTriggerService {
 
   /// Vérifie si la reconnaissance vocale est initialisée
   bool get isSpeechReady => _speechService.isInitialized;
+
+  /// Vérifie si l'écoute native iOS est active
+  Future<bool> isNativeListening() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isListening');
+      debugPrint('🔍 isNativeListening: $result');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('⚠️ isNativeListening error: $e');
+      return false;
+    }
+  }
+
+  /// Vérifie si le micro capte réellement (tap installé), par opposition
+  /// à `isNativeListening` qui reste vrai même hors plage horaire.
+  Future<bool> isNativeActivelyListening() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isActivelyListening');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('⚠️ isNativeActivelyListening error: $e');
+      return false;
+    }
+  }
+
+  /// Vérifie si l'écoute native iOS est en enregistrement
+  Future<bool> isNativeRecording() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isRecording');
+      debugPrint('🔍 isNativeRecording: $result');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('⚠️ isNativeRecording error: $e');
+      return false;
+    }
+  }
 
   /// Demande la permission de reconnaissance vocale (iOS)
   Future<bool> requestSpeechPermission() async {
