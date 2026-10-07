@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,7 +38,7 @@ func NewService() *Service {
 		token:   token,
 		botUser: botUser,
 		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: 60 * time.Second,
 		},
 	}
 }
@@ -156,6 +160,78 @@ func (s *Service) RemoveKeyboard(chatID int64, text string) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram sendMessage %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// SendAudio downloads audio from audioURL and sends it to a Telegram chat.
+// Uses sendAudio (m4a/mp3) so contacts can play it inline.
+func (s *Service) SendAudio(chatID int64, audioURL, caption string) error {
+	if s == nil || s.token == "" {
+		return fmt.Errorf("telegram non configuré")
+	}
+	if audioURL == "" {
+		return fmt.Errorf("url audio vide")
+	}
+
+	dlResp, err := s.httpClient.Get(audioURL)
+	if err != nil {
+		return fmt.Errorf("téléchargement audio: %w", err)
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(dlResp.Body, 512))
+		return fmt.Errorf("téléchargement audio %d: %s", dlResp.StatusCode, string(body))
+	}
+
+	filename := path.Base(audioURL)
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "alerte.m4a"
+	}
+	if !strings.Contains(filename, ".") {
+		filename += ".m4a"
+	}
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return err
+	}
+	if caption != "" {
+		if err := w.WriteField("caption", caption); err != nil {
+			return err
+		}
+		if err := w.WriteField("parse_mode", "HTML"); err != nil {
+			return err
+		}
+	}
+	part, err := w.CreateFormFile("audio", filename)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, dlResp.Body); err != nil {
+		return fmt.Errorf("copie audio: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendAudio", s.token)
+	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("telegram sendAudio %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }

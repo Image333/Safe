@@ -1,4 +1,3 @@
-import '../config/api_config.dart';
 import '../storage/auth_storage.dart';
 import 'api_service.dart';
 import 'minio_upload_service.dart';
@@ -80,9 +79,15 @@ class AudioSyncService {
         objectKey: objectKey,
       );
 
-      final resolvedAlertId = (alertId != null && alertId > 0)
-          ? alertId
-          : ApiConfig.stubAlertId;
+      var resolvedAlertId = (alertId != null && alertId > 0) ? alertId : 0;
+      if (resolvedAlertId <= 0) {
+        // Pas d'alerte fournie : on en crée une pour notifier Telegram + lier l'audio.
+        final alert = await _apiService.createAlert(token: token);
+        resolvedAlertId = alert.alertId;
+      }
+      if (resolvedAlertId <= 0) {
+        return AudioSyncResult.failed('Impossible de lier l\'audio à une alerte');
+      }
 
       final createResponse = await _apiService.createAudio(
         token: token,

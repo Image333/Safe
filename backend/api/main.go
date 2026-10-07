@@ -82,6 +82,7 @@ func main() {
 	routes.RegisterUserRoutes(api, db)
 	routes.RegisterContactRoutes(api, db, tg)
 	routes.RegisterAlertRoutes(api, db, tg)
+	routes.RegisterAudioRoutes(api, db, tg)
 
 	log.Println("Server starting on :8080...")
 	if err := app.Listen(":8080"); err != nil {

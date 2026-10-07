@@ -149,7 +149,7 @@ func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userNam
 	defer rows.Close()
 
 	msg := fmt.Sprintf(
-		"🚨 <b>Alerte SAFE</b>\n\n%s a déclenché une alerte d'urgence.\nAlerte #%d",
+		"🚨 <b>Alerte SAFE</b>\n\n%s a déclenché une alerte d'urgence.\nAlerte #%d\n\n🎤 Un enregistrement audio suivra dès qu'il sera disponible.",
 		userName, alertID,
 	)
 
