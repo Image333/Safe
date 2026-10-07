@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"gpe/routes"
-	_ "gpe/routes"
+	"gpe/telegram"
 	"log"
 	"os"
 	"time"
@@ -16,9 +16,15 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/mysql"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Charge backend/api/.env si présent (ignoré si absent)
+	if err := godotenv.Load(); err != nil {
+		log.Println("Aucun fichier .env trouvé — variables d'environnement système utilisées")
+	}
+
 	// for local usage : kubectl port-forward svc/my-mariadb -n gpe 3306:3306
 	dbUser := getEnv("DB_USER", "gpe-user")
 	dbPass := getEnv("DB_PASSWORD", "azerty1234")
@@ -68,7 +74,14 @@ func main() {
 
 	api := app.Group("/api/v1")
 
+	tg := telegram.NewService()
+
+	// Webhook Telegram AVANT RegisterUserRoutes : celui-ci fait router.Use(ProtectedRoute())
+	// sur le groupe /api/v1, ce qui bloquait /telegram/webhook en 401 (pas de JWT).
+	routes.RegisterTelegramRoutes(api, db, tg)
 	routes.RegisterUserRoutes(api, db)
+	routes.RegisterContactRoutes(api, db, tg)
+	routes.RegisterAlertRoutes(api, db, tg)
 
 	log.Println("Server starting on :8080...")
 	if err := app.Listen(":8080"); err != nil {
