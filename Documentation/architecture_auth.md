@@ -272,4 +272,4 @@ flutter run
 - Tests unitaires et d'intégration
 - Envoi email d’invitation Telegram (SMTP) — stub API déjà en place
 
-> **Fait (contacts / alertes) :** sync contacts de confiance + alerte Telegram côté backend — voir [architecture_telegram_alerts.md](./architecture_telegram_alerts.md) et [api/contacts.md](./api/contacts.md).
+> **Fait (contacts / alertes) :** sync contacts de confiance + alerte Telegram texte + suivi audio (`SendAudio` après MinIO) — voir [architecture_telegram_alerts.md](./architecture_telegram_alerts.md), [api/contacts.md](./api/contacts.md) et [api/audio.md](./api/audio.md).

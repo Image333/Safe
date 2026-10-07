@@ -9,12 +9,13 @@ Key points :
 - [Get Alert by ID](#get-alert-by-id)
 - [Update Alert Status](#update-alert-status)
 - [Delete Alert](#delete-alert)
+- Audio attaché : voir **[API Audio](./audio.md)** (`POST /alerts/:id/audio`, `GET /me/audio`)
 
 > **Note:** All alert endpoints are **protected** (JWT). Every alert is owned by the user in the JWT ; accès à une alerte d’un autre user → `403`.
 
 > See: **[JWT Authentication](./users.md#authentication---user-login)**
 
-Après création, le backend notifie les contacts Telegram **liés** (`sendMessage`). Voir [Architecture Telegram](../architecture_telegram_alerts.md).
+Après création, le backend notifie les contacts Telegram **liés** (`sendMessage`, texte + mention qu’un enregistrement suivra). L’audio part ensuite via [POST /alerts/:id/audio](./audio.md) une fois MinIO OK. Voir [Architecture Telegram](../architecture_telegram_alerts.md).
 
 ---
 
@@ -80,7 +81,7 @@ ou
 
 ### Flutter
 
-`HomeScreen._triggerAlert` appelle cet endpoint puis attache l’audio via `POST /alerts/:alertId/audio` lorsque l’upload MinIO réussit.
+`HomeScreen._triggerAlert` et `VoiceTriggerService` appellent cet endpoint, enregistrent le clip, uploadent sur MinIO, puis `POST /alerts/:alertId/audio` (voir [audio.md](./audio.md)). Si MinIO est injoignable, le snackbar indique un clip conservé en local — aucun `sendAudio` Telegram.
 
 ---
 

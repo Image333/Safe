@@ -19,6 +19,8 @@ This prefix must be included before every endpoint path.
 | `POST /contacts`                 | `/api/v1/contacts`                   |
 | `GET /contacts`                  | `/api/v1/contacts`                   |
 | `POST /alerts`                   | `/api/v1/alerts`                     |
+| `POST /alerts/{id}/audio`        | `/api/v1/alerts/{id}/audio`          |
+| `GET /me/audio`                  | `/api/v1/me/audio`                   |
 | `POST /telegram/webhook`         | `/api/v1/telegram/webhook`           |
 | `...`                            | `...`                                |
 
@@ -41,4 +43,5 @@ Content-Type: application/json
 - [Users](./users.md)
 - [Contacts](./contacts.md)
 - [Alerts](./alerts.md)
+- [Audio](./audio.md)
 - [Telegram webhook](./telegram.md)

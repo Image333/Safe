@@ -30,11 +30,12 @@ Mettre en place un mode **armé** qui:
 - Au match: découpage d'un clip de durée configurable.
 - Retour d'événements vers Flutter (détection, début/fin enregistrement, erreurs).
 
-### 3) Backend (phase 2)
+### 3) Backend / sync (en place pour Telegram)
 
-- Endpoint upload audio chiffré.
-- Retry + queue locale si hors-ligne.
-- Politique de rétention (suppression auto).
+- Au match : `createAlert` (texte Telegram) puis upload MinIO + `POST /alerts/:id/audio` → `SendAudio` aux contacts liés.
+- Hors-ligne / MinIO KO : clip conservé en local (historique) ; pas de `sendAudio`.
+- Détail : [architecture_telegram_alerts.md](./architecture_telegram_alerts.md), [api/audio.md](./api/audio.md).
+- À venir : chiffrement upload, queue retry robuste, rétention.
 
 ## Contrat MethodChannel (v1)
 
