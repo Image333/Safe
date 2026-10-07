@@ -53,11 +53,12 @@ class AudioSyncService {
         _authStorage = authStorage ?? AuthStorage();
 
   /// Si non authentifié → local only.
-  /// Si authentifié → MinIO puis POST /alerts/:stubAlertId/audio.
+  /// Si authentifié → MinIO puis POST /alerts/:alertId/audio.
   /// En cas d'échec → fallback local (fichier déjà sur disque).
   Future<AudioSyncResult> syncEmergencyClip({
     required String localFilePath,
     required int durationSec,
+    int? alertId,
   }) async {
     final isAuthenticated = await _auth.isAuthenticated();
     if (!isAuthenticated) {
@@ -79,10 +80,13 @@ class AudioSyncService {
         objectKey: objectKey,
       );
 
-      // TODO: remplacer stubAlertId par l'ID renvoyé par POST /alerts
+      final resolvedAlertId = (alertId != null && alertId > 0)
+          ? alertId
+          : ApiConfig.stubAlertId;
+
       final createResponse = await _apiService.createAudio(
         token: token,
-        alertId: ApiConfig.stubAlertId,
+        alertId: resolvedAlertId,
         blobUrl: blobUrl,
         duration: durationSec > 0 ? durationSec : 1,
         format: 'm4a',
