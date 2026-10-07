@@ -268,7 +268,8 @@ flutter run
 
 - Implémentation du reset de mot de passe
 - Refresh token pour prolonger les sessions
-- Middleware d'authentification pour les routes protégées
-- Synchronisation des données utilisateur (contacts, configuration)
-- Tests unitaires et d'intégration
 - Déconnexion automatique à l'expiration du token
+- Tests unitaires et d'intégration
+- Envoi email d’invitation Telegram (SMTP) — stub API déjà en place
+
+> **Fait (contacts / alertes) :** sync contacts de confiance + alerte Telegram côté backend — voir [architecture_telegram_alerts.md](./architecture_telegram_alerts.md) et [api/contacts.md](./api/contacts.md).

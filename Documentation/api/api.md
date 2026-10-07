@@ -10,13 +10,17 @@ This prefix must be included before every endpoint path.
 
 ### Examples
 
-| Documented Endpoint     | Actual URL              |
-| ----------------------- | ----------------------- |
-| `POST /login`           | `/api/v1/login`         |
-| `POST /users`           | `/api/v1/users`         |
-| `GET /users/{email}`    | `/api/v1/users/{email}` |
-| `DELETE /users/{email}` | `/api/v1/users/{email}` |
-| `...`                     | `...`                    |
+| Documented Endpoint              | Actual URL                           |
+| -------------------------------- | ------------------------------------ |
+| `POST /login`                    | `/api/v1/login`                      |
+| `POST /users`                    | `/api/v1/users`                      |
+| `GET /users/{email}`             | `/api/v1/users/{email}`              |
+| `DELETE /users/{email}`          | `/api/v1/users/{email}`              |
+| `POST /contacts`                 | `/api/v1/contacts`                   |
+| `GET /contacts`                  | `/api/v1/contacts`                   |
+| `POST /alerts`                   | `/api/v1/alerts`                     |
+| `POST /telegram/webhook`         | `/api/v1/telegram/webhook`           |
+| `...`                            | `...`                                |
 
 ### Example Request
 
@@ -32,5 +36,9 @@ Content-Type: application/json
 
 > **Note:** Unless otherwise specified, all endpoint paths shown throughout this documentation are relative to the `/api/v1` base path.
 
-# Documented enpoints
+# Documented endpoints
+
 - [Users](./users.md)
+- [Contacts](./contacts.md)
+- [Alerts](./alerts.md)
+- [Telegram webhook](./telegram.md)
