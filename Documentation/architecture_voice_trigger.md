@@ -1,108 +1,209 @@
-# Architecture - Déclenchement vocal d'urgence (durée modulable)
+# Architecture - Déclenchement vocal d'urgence
+
+## Statut
+
+Ce document décrit l'état réel du moteur vocal de Safe tel qu'il est codé aujourd'hui. Il est centré sur ce qui existe réellement dans l'application et le backend, sans reformuler un plan de conception non abouti.
 
 ## Objectif
 
-Mettre en place un mode **armé** qui:
-- écoute en continu un mot-clé choisi par l'utilisateur,
-- fonctionne en arrière-plan,
-- déclenche un enregistrement audio avec durée configurable (15s par défaut, 2 min possible),
-- reste compatible iOS (écran verrouillé) et Android.
+Le moteur de sécurité permet d'armé un mode de surveillance qui :
+- écoute un mot-clé configurable,
+- détecte une phrase ou une occurrence pertinente,
+- démarre un enregistrement audio,
+- conserve le clip localement,
+- synchronise le clip avec le backend si l'utilisateur est connecté,
+- notifie les contacts Telegram liés.
 
-## Contraintes produit et plateforme
+## Contrainte principale
 
-- iOS ne permet pas de réveiller librement une app suspendue/tuée pour démarrer le micro.
-- Le fonctionnement écran verrouillé iOS nécessite une session audio active + mode background `audio`.
-- L'utilisateur doit activer explicitement le mode armé et consentir à l'usage micro.
-- Les indicateurs système d'utilisation micro restent visibles.
+Le système doit fonctionner dans des conditions d'usage mobile réelles :
+- audio en arrière-plan limité sur iOS,
+- service foreground requis sur Android,
+- permissions micro / speech à vérifier,
+- dégradation acceptable si le moteur natif échoue.
 
-## Architecture proposée
+## Vue d'ensemble
 
-### 1) Flutter (orchestration)
+```text
+Flutter UI / Settings / Home
+        │
+        ▼
+VoiceTriggerService
+  - lecture de la config
+  - arm/disarm
+  - orchestration du déclenchement
+  - callbacks UI
+  - synchronisation audio
+        │
+        ├── VoiceTriggerStorage
+        │     persistance locale
+        │
+        ├── SpeechRecognitionService
+        │     fallback Flutter (speech_to_text)
+        │
+        ├── EmergencyAudioService
+        │     enregistrement audio local
+        │
+        ├── AudioHistoryService
+        │     historique local
+        │
+        └── AudioSyncService
+              upload MinIO + liaison alerte / audio
+```
 
-- `VoiceTriggerStorage`: persistance de la config (mot-clé, durée, état armé).
-- `VoiceTriggerService`: API métier (`saveConfig`, `arm`, `disarm`, `syncStateAtAppStart`).
-- Bridge natif via `MethodChannel`: `safe/voice_trigger`.
+## 1. Couche Flutter
 
-### 2) Natif iOS/Android (audio temps réel)
+### `VoiceTriggerService`
+C'est le point d'entrée du moteur vocal.
 
-- Démarrage d'une écoute continue à faible latence.
-- Détection wake-word locale (on-device) via moteur dédié.
-- Au match: découpage d'un clip de durée configurable.
-- Retour d'événements vers Flutter (détection, début/fin enregistrement, erreurs).
+Il gère :
+- `saveConfig()` : mot-clé et durée d'enregistrement,
+- `arm()` / `disarm()` : activation et désactivation du mode sécurité,
+- `syncStateAtAppStart()` : lecture de l'état au démarrage,
+- callbacks pour l'UI (`onKeywordDetected`, `onRecordingStarted`, `onRecordingSynced`, `onError`),
+- `_syncRecordedClip()` : traitement d'un clip fini.
 
-### 3) Backend / sync (en place pour Telegram)
+### `VoiceTriggerStorage`
+Stocke les données de configuration et l'état :
+- mot-clé,
+- durée d'enregistrement,
+- plage horaire,
+- état armé.
 
-- Au match : `createAlert` (texte Telegram) puis upload MinIO + `POST /alerts/:id/audio` → `SendAudio` aux contacts liés.
-- Hors-ligne / MinIO KO : clip conservé en local (historique) ; pas de `sendAudio`.
-- Détail : [architecture_telegram_alerts.md](./architecture_telegram_alerts.md), [api/audio.md](./api/audio.md).
-- À venir : chiffrement upload, queue retry robuste, rétention.
+### `SpeechRecognitionService`
+C'est le fallback Dart. Il utilise `speech_to_text` pour écouter et comparer le résultat avec le mot-clé configuré.
 
-## Contrat MethodChannel (v1)
+Il prend en charge :
+- initialisation du moteur,
+- démarrage / arrêt de l'écoute,
+- relance automatique après erreur,
+- déclenchement de l'enregistrement audio.
 
-Canal: `safe/voice_trigger`
+### `EmergencyAudioService`
+Permet d'enregistrer un clip audio localement avec une durée donnée.
 
-### Appels Flutter -> Natif
+### `AudioHistoryService`
+Gère l'historique local des clips afin que l'application puisse afficher les enregistrements.
 
-- `startListening`
-  - payload:
-    - `keyword: String`
-    - `recordingDurationSec: int`
-      - bornes recommandées: `5..600`
-- `stopListening`
+### `AudioSyncService`
+Orchestre la synchronisation :
+- contrôle si l'utilisateur est authentifié,
+- upload du fichier vers MinIO,
+- création ou récupération d'une alerte,
+- envoi `POST /alerts/:alertId/audio`.
 
-### Événements Natif -> Flutter (EventChannel recommandé)
+## 2. Couche native
 
-- `listening_started`
+Le moteur natif est relié via des canaux de communication Flutter ↔ natif :
+- `MethodChannel` : `safe/voice_trigger`
+- `EventChannel` : `safe/voice_trigger_events`
+
+Les événements remontés incluent :
 - `keyword_detected`
 - `recording_started`
-- `recording_completed` (avec `filePath`)
-- `error` (avec `code`, `message`)
+- `recording_completed`
+- `error`
 
-## Plan d'exécution conseillé
+### iOS
+Le code natif iOS gère la reconnaissance audio et relaye les événements à Flutter. L'objectif est de garder la détection la plus proche du système pour limiter la latence.
 
-### Phase 0 - Base projet (fait)
+### Android
+Le moteur Android est également piloté par le canal natif, avec un comportement compatible foreground service.
 
-- Storage et service Flutter créés.
-- Permissions déclarées iOS/Android.
-- Bridge `MethodChannel` iOS + Android branché (`safe/voice_trigger`).
-- Android: foreground service de base avec notification persistante.
+## 3. Flux réel de fonctionnement
 
-### Phase 1 - POC iOS local
+### Démarrage de l'app
+Au lancement, le service synchronise son état local :
+- mot-clé,
+- durée d'enregistrement,
+- plage horaire,
+- mode armé / désarmé.
 
-- Implémenter le canal natif dans `AppDelegate.swift`.
-- Configurer `AVAudioSession` (`playAndRecord` + options adaptées).
-- Détection wake-word + enregistrement à durée configurable.
-- Vérifier comportement lock screen.
+### Armement
+Quand l'utilisateur active le mode :
+1. l'app vérifie les permissions,
+2. la configuration est chargée,
+3. l'écoute est lancée,
+4. l'état armé est sauvegardé localement.
 
-### Phase 2 - POC Android local
+### Écoute
+Le moteur écoute selon son contexte :
+- mot-clé défini,
+- plage horaire respectée,
+- mode armé actif.
 
-- Service foreground + notification persistante.
-- Détection wake-word + enregistrement à durée configurable.
+### Détection du mot-clé
+Quand le mot-clé est détecté :
+- l'écoute est stoppée,
+- le callback `onKeywordDetected` est déclenché,
+- l'enregistrement audio démarre.
 
-### Phase 3 - Intégration produit
+### Enregistrement
+Le clip est enregistré localement par `EmergencyAudioService`.
 
-- Écran de réglages:
-  - saisie du mot-clé,
-  - bouton armer/désarmer,
-  - test de déclenchement.
-- Journal local minimal (horodatage, succès/erreur).
+### Synchronisation backend
+Le fichier est ensuite envoyé à `AudioSyncService` :
+- si pas connecté : le clip reste local,
+- si connecté : upload MinIO + création d'alerte + `POST /alerts/:id/audio`.
 
-### Phase 4 - Robustesse
+## 4. Intégration avec les alertes
 
-- Chiffrement local des clips.
-- Upload différé + retry.
-- Télémétrie technique (CPU, batterie, taux de faux positifs).
+Le flux complet est :
 
-## Critères d'acceptation minimum (MVP)
+```text
+mot-clé détecté
+    ↓
+clip audio enregistré
+    ↓
+alert creation (si session active)
+    ↓
+notification texte aux contacts Telegram
+    ↓
+upload MinIO
+    ↓
+POST /alerts/:id/audio
+    ↓
+SendAudio aux contacts liés
+```
 
-- Mode armé activable/désactivable depuis l'app.
-- Détection mot-clé < 1.5 s en médiane.
-- Enregistrement clip stable sur 10 déclenchements consécutifs pour plusieurs durées (15s, 60s, 120s).
-- iOS: fonctionnement en arrière-plan écran verrouillé tant que l'app est active en mode armé.
-- Aucun crash si la couche native est indisponible.
+Le backend reçoit ensuite l'URL du fichier, enregistre la donnée dans `audio_records` et envoie le son aux contacts Telegram liés.
 
-## Risques et mitigations
+## 5. Composants backend
 
-- **Batterie élevée**: réduire fréquence/complexité du moteur wake-word.
-- **Faux positifs**: seuil + double validation courte.
-- **Rejet App Store**: écran de consentement clair, finalité explicite, politique de confidentialité.
+Le backend Go gère les endpoints suivants :
+- `/api/v1/alerts`
+- `/api/v1/alerts/:id/audio`
+- `/api/v1/me/audio`
+- `/api/v1/contacts`
+- `/api/v1/telegram/webhook`
+
+Les rôles sont clairs :
+- Flutter orchestre l'interaction,
+- le natif gère le capteur audio,
+- le backend crée les alertes et synchronise les notifications.
+
+## 6. Points de robustesse actuels
+
+### Ce qui est réellement en place
+- moteur vocal accessible depuis le frontend,
+- fallback Flutter actif,
+- sync avec MinIO et backend,
+- alerte Telegram liée à un contact,
+- historique local des clips,
+- persistance de l'état du moteur.
+
+### Points encore à améliorer
+- background audio iOS plus fiable,
+- retry des uploads hors ligne,
+- meilleure gestion des faux positifs,
+- sécurisation plus forte des fichiers / retries.
+
+## 7. Synthèse
+
+Le moteur vocal de Safe est aujourd'hui un système hybride et cohérent :
+- Flutter orchestre l'expérience,
+- la couche native prend en charge les opérations temps réel,
+- le backend sécurise l'alerte, le stockage et la notification,
+- Telegram sert de canal de diffusion des alertes aux proches.
+
+C'est la base de fonctionnement réelle de l'application de sécurité.
