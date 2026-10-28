@@ -3,16 +3,13 @@ package routes
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"log"
 	"strconv"
-	"strings"
-
-	"gpe/telegram"
 
 	"github.com/gofiber/fiber/v2"
 )
 
+// allowedAlertStatuses lists the accepted alert statuses
 var allowedAlertStatuses = map[string]bool{
 	"PENDING":   true,
 	"TRIGGERED": true,
@@ -20,14 +17,17 @@ var allowedAlertStatuses = map[string]bool{
 	"CANCELLED": true,
 }
 
+// CreateAlertRequest is the payload for creating an alert
 type CreateAlertRequest struct {
 	ConfigID int `json:"config_id"`
 }
 
+// UpdateAlertRequest is the payload for updating an alert
 type UpdateAlertRequest struct {
 	Status string `json:"status"`
 }
 
+// AlertResponse is an alert returned by the API
 type AlertResponse struct {
 	AlertID   int    `json:"alert_id"`
 	Timestamp string `json:"timestamp"`
@@ -36,163 +36,59 @@ type AlertResponse struct {
 	ConfigID  int    `json:"config_id"`
 }
 
-type NotifyResult struct {
-	ContactID      int    `json:"contact_id"`
-	ContactName    string `json:"contact_name"`
-	Status         string `json:"status"` // sent | not_linked | error
-	Channel        string `json:"channel,omitempty"`
-	Error          string `json:"error,omitempty"`
+// RegisterAlertRoutes registers all alert endpoints
+func RegisterAlertRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler) {
+	router.Post("/alerts", keyMiddleware, ProtectedRoute(), createAlert(db))
+	router.Get("/alerts", keyMiddleware, ProtectedRoute(), listAlerts(db))
+	router.Get("/alerts/:id", keyMiddleware, ProtectedRoute(), getAlert(db))
+	router.Put("/alerts/:id", keyMiddleware, ProtectedRoute(), updateAlert(db))
+	router.Delete("/alerts/:id", keyMiddleware, ProtectedRoute(), deleteAlert(db))
 }
 
-// RegisterAlertRoutes registers alert endpoints with Telegram fan-out on create.
-func RegisterAlertRoutes(router fiber.Router, db *sql.DB, tg *telegram.Service) {
-	router.Post("/alerts", ProtectedRoute(), createAlert(db, tg))
-	router.Get("/alerts", ProtectedRoute(), listAlerts(db))
-	router.Get("/alerts/:id", ProtectedRoute(), getAlert(db))
-	router.Put("/alerts/:id", ProtectedRoute(), updateAlert(db))
-	router.Delete("/alerts/:id", ProtectedRoute(), deleteAlert(db))
-}
-
-func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
+// POST /api/v1/alerts — Creates an alert owned by the authenticated user
+func createAlert(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := getCurrentUserID(c)
-		if userID == 0 {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Utilisateur non authentifié"})
-		}
 
 		var req CreateAlertRequest
-		_ = c.BodyParser(&req)
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
+		}
 
-		configID, err := resolveConfigID(db, userID, req.ConfigID)
+		if req.ConfigID <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "config_id requis"})
+		}
+
+		// The referenced configuration must exist (FK config_id NOT NULL)
+		var configID int
+		err := db.QueryRow(`SELECT config_id FROM configurations WHERE config_id = ?`, req.ConfigID).Scan(&configID)
 		if err != nil {
-			log.Printf("resolveConfigID: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de résoudre la configuration"})
+			if errors.Is(err, sql.ErrNoRows) {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Configuration non trouvée"})
+			}
+			log.Printf("Erreur SQL vérification configuration: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Erreur serveur"})
 		}
 
 		result, err := db.Exec(
-			`INSERT INTO alerts (user_id, config_id, status) VALUES (?, ?, 'TRIGGERED')`,
-			userID, configID,
+			`INSERT INTO alerts (user_id, config_id) VALUES (?, ?)`,
+			userID, req.ConfigID,
 		)
 		if err != nil {
 			log.Printf("Erreur SQL INSERT alerte: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de créer l'alerte"})
 		}
-		alertID, _ := result.LastInsertId()
 
-		userName := loadUserDisplayName(db, userID)
-		notifications := notifyTrustedContacts(db, tg, userID, userName, int(alertID))
+		newID, _ := result.LastInsertId()
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-			"message":       "Alerte créée avec succès",
-			"alert_id":      alertID,
-			"notifications": notifications,
+			"message":  "Alerte créée avec succès",
+			"alert_id": newID,
 		})
 	}
 }
 
-func resolveConfigID(db *sql.DB, userID, requested int) (int, error) {
-	if requested > 0 {
-		var id int
-		err := db.QueryRow(`SELECT config_id FROM configurations WHERE config_id = ?`, requested).Scan(&id)
-		if err == nil {
-			return id, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return 0, err
-		}
-	}
-
-	var userConfig sql.NullInt64
-	err := db.QueryRow(`SELECT config_id FROM users WHERE user_id = ?`, userID).Scan(&userConfig)
-	if err != nil {
-		return 0, err
-	}
-	if userConfig.Valid && userConfig.Int64 > 0 {
-		return int(userConfig.Int64), nil
-	}
-
-	res, err := db.Exec(
-		`INSERT INTO configurations (alert_word, app_disguise) VALUES (?, ?)`,
-		"aide", "calculator",
-	)
-	if err != nil {
-		return 0, err
-	}
-	newID, _ := res.LastInsertId()
-	_, _ = db.Exec(`UPDATE users SET config_id = ? WHERE user_id = ?`, newID, userID)
-	return int(newID), nil
-}
-
-func loadUserDisplayName(db *sql.DB, userID int) string {
-	var firstname, name string
-	err := db.QueryRow(`SELECT firstname, name FROM users WHERE user_id = ?`, userID).Scan(&firstname, &name)
-	if err != nil {
-		return "Un utilisateur SAFE"
-	}
-	full := strings.TrimSpace(firstname + " " + name)
-	if full == "" {
-		return "Un utilisateur SAFE"
-	}
-	return full
-}
-
-func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userName string, alertID int) []NotifyResult {
-	rows, err := db.Query(`
-		SELECT c.contact_id, c.contact_name, c.telegram_chat_id, c.email, c.invite_token
-		FROM contacts c
-		INNER JOIN user_contacts uc ON uc.contact_id = c.contact_id
-		WHERE uc.user_id = ?`, userID)
-	if err != nil {
-		log.Printf("notifyTrustedContacts query: %v", err)
-		return []NotifyResult{}
-	}
-	defer rows.Close()
-
-	msg := fmt.Sprintf(
-		"🚨 <b>Alerte SAFE</b>\n\n%s a déclenché une alerte d'urgence.\nAlerte #%d\n\n🎤 Un enregistrement audio suivra dès qu'il sera disponible.",
-		userName, alertID,
-	)
-
-	results := []NotifyResult{}
-	for rows.Next() {
-		var (
-			contactID int
-			name      string
-			chatID    sql.NullInt64
-			email     sql.NullString
-			token     sql.NullString
-		)
-		if err := rows.Scan(&contactID, &name, &chatID, &email, &token); err != nil {
-			log.Printf("notify scan: %v", err)
-			continue
-		}
-
-		r := NotifyResult{
-			ContactID:   contactID,
-			ContactName: name,
-		}
-
-		if chatID.Valid && tg != nil {
-			if err := tg.SendMessage(chatID.Int64, msg); err != nil {
-				r.Status = "error"
-				r.Channel = "telegram"
-				r.Error = err.Error()
-			} else {
-				r.Status = "sent"
-				r.Channel = "telegram"
-			}
-		} else if chatID.Valid && tg == nil {
-			r.Status = "error"
-			r.Channel = "telegram"
-			r.Error = "telegram non configuré"
-		} else {
-			r.Status = "not_linked"
-		}
-		results = append(results, r)
-	}
-	return results
-}
-
+// GET /api/v1/alerts — Lists the alerts of the authenticated user
 func listAlerts(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := getCurrentUserID(c)
@@ -232,6 +128,7 @@ func listAlerts(db *sql.DB) fiber.Handler {
 	}
 }
 
+// GET /api/v1/alerts/:id — Returns an alert by its ID (owner only)
 func getAlert(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id, err := strconv.Atoi(c.Params("id"))
@@ -269,6 +166,7 @@ func getAlert(db *sql.DB) fiber.Handler {
 	}
 }
 
+// PUT /api/v1/alerts/:id — Updates an alert status (owner only)
 func updateAlert(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id, err := strconv.Atoi(c.Params("id"))
@@ -291,6 +189,9 @@ func updateAlert(db *sql.DB) fiber.Handler {
 			return c.Status(code).JSON(fiber.Map{"error": msg})
 		}
 
+		// No RowsAffected check here: MySQL reports 0 when the status is left
+		// unchanged, which must NOT be mistaken for a 404. Existence is already
+		// guaranteed by the ownership check above.
 		if _, err := db.Exec(`UPDATE alerts SET status = ? WHERE alert_id = ?`, req.Status, id); err != nil {
 			log.Printf("Erreur SQL UPDATE alerte: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de mettre à jour l'alerte"})
@@ -300,6 +201,7 @@ func updateAlert(db *sql.DB) fiber.Handler {
 	}
 }
 
+// DELETE /api/v1/alerts/:id — Deletes an alert (owner only)
 func deleteAlert(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id, err := strconv.Atoi(c.Params("id"))
@@ -322,6 +224,8 @@ func deleteAlert(db *sql.DB) fiber.Handler {
 	}
 }
 
+// checkAlertOwnership verifies that the alert exists and belongs to userID.
+// It returns (0, "") on success, otherwise the HTTP status and the JSON error message.
 func checkAlertOwnership(db *sql.DB, alertID, userID int) (int, string) {
 	var ownerID int
 	err := db.QueryRow(`SELECT user_id FROM alerts WHERE alert_id = ?`, alertID).Scan(&ownerID)

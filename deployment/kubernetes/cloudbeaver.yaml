@@ -1,75 +1,4 @@
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cloudbeaver-config
-  namespace: gpe
-data:
-  data-sources.json: |
-    {
-    	"folders": {},
-    	"connections": {
-    		"mariaDB-19ea782a30c-4efc63e794376398": {
-    			"provider": "mysql",
-    			"driver": "mariaDB",
-    			"name": "MariaDB@my-mariadb",
-    			"configuration": {
-    				"host": "my-mariadb",
-    				"port": "3306",
-    				"database": "gpe-db",
-    				"url": "jdbc:mariadb://my-mariadb:3306/gpe-db",
-    				"configurationType": "MANUAL",
-    				"type": "dev",
-    				"closeIdleConnection": true,
-    				"provider-properties": {
-    					"@dbeaver-show-all-dbs@": "false"
-    				},
-    				"auth-model": "native",
-    				"bootstrap": {
-    					"autocommit": true
-    				}
-    			}
-    		}
-    	},
-    	"connection-types": {
-    		"dev": {
-    			"name": "Development",
-    			"color": "255,255,255",
-    			"description": "Regular development database",
-    			"auto-commit": true,
-    			"confirm-execute": false,
-    			"confirm-data-change": false,
-    			"smart-commit": false,
-    			"smart-commit-recover": true,
-    			"auto-close-transactions": true,
-    			"close-transactions-period": 1800,
-    			"auto-close-connections": true,
-    			"close-connections-period": 14400
-    		}
-    	}
-    }
-  # initial-data.conf: |
-  #   {
-  #       adminName: "cbadmin",
-  #       adminPassword: "cbadmin_password",
-  #       teams: [
-  #           {
-  #               subjectId: "admin",
-  #               teamName: "Admin",
-  #               description: "Administrative access. Has total and full authority.",
-  #               permissions: ["admin"]
-  #           },
-  #           {
-  #               subjectId: "user",
-  #               teamName: "User",
-  #               description: "Standard user",
-  #               permissions: []
-  #           }
-  #       ]
-  #   }
-
-
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: cloudbeaver-data-pvc
@@ -97,27 +26,20 @@ spec:
         app: cloudbeaver
     spec:
       containers:
-      - name: cloudbeaver
-        image: dbeaver/cloudbeaver:latest
-        ports:
-        - containerPort: 8978
-        volumeMounts:
-        - name: cloudbeaver-data
-          mountPath: /opt/cloudbeaver/workspace
-        # Montage dans le dossier de configuration initiale de l'application
-        - name: config-volume
-          mountPath: /opt/cloudbeaver/workspace/GlobalConfiguration/.dbeaver/data-sources.json
-          subPath: data-sources.json
-        # - name: config-volume
-        #   mountPath: /opt/cloudbeaver/workspace/conf/initial-data.conf
-        #   subPath: initial-data.conf
+        - name: cloudbeaver
+          image: dbeaver/cloudbeaver:latest
+          ports:
+            - containerPort: 8978
+          env:
+            - name: CB_SAMPLE_DATA
+              value: "false"
+          volumeMounts:
+            - name: cloudbeaver-data
+              mountPath: /opt/cloudbeaver/workspace
       volumes:
-      - name: cloudbeaver-data
-        persistentVolumeClaim:
-          claimName: cloudbeaver-data-pvc
-      - name: config-volume
-        configMap:
-          name: cloudbeaver-config
+        - name: cloudbeaver-data
+          persistentVolumeClaim:
+            claimName: cloudbeaver-data-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -127,8 +49,8 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - port: 8978
-    targetPort: 8978
-    nodePort: 30978
+    - port: 8978
+      targetPort: 8978
+      nodePort: 30978
   selector:
     app: cloudbeaver
