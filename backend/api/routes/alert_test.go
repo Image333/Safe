@@ -23,7 +23,7 @@ func setupAlertTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 	}
 
 	noopMiddleware := func(c *fiber.Ctx) error { return c.Next() }
-	RegisterAlertRoutes(app, db, noopMiddleware)
+	RegisterAlertRoutes(app, db, noopMiddleware, nil)
 
 	t.Cleanup(func() {
 		db.Close()
@@ -41,15 +41,23 @@ func setupAlertTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 func TestCreateAlert_Success(t *testing.T) {
 	app, mock := setupAlertTestEnv(t)
 
-	// The referenced configuration must exist
 	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
 		WithArgs(2).
 		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
 
-	// user_id comes from the JWT (1), config_id from the body (2)
 	mock.ExpectExec(`INSERT INTO alerts`).
 		WithArgs(1, 2).
 		WillReturnResult(sqlmock.NewResult(7, 1))
+
+	mock.ExpectQuery(`SELECT firstname, name FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"firstname", "name"}).AddRow("Jean", "Dupont"))
+
+	mock.ExpectQuery(`SELECT c.contact_id, c.contact_name, c.telegram_chat_id`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"contact_id", "contact_name", "telegram_chat_id", "email", "invite_token",
+		}))
 
 	body := CreateAlertRequest{ConfigID: 2}
 	jsonBody, _ := json.Marshal(body)
@@ -71,10 +79,27 @@ func TestCreateAlert_Success(t *testing.T) {
 	}
 }
 
-// TestCreateAlert_MissingConfigID: a missing or zero config_id is rejected with
-// 400 before any SQL query is issued.
+// TestCreateAlert_MissingConfigID: zero config_id falls back to the user's config.
 func TestCreateAlert_MissingConfigID(t *testing.T) {
-	app, _ := setupAlertTestEnv(t)
+	app, mock := setupAlertTestEnv(t)
+
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(5))
+
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 5).
+		WillReturnResult(sqlmock.NewResult(8, 1))
+
+	mock.ExpectQuery(`SELECT firstname, name FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"firstname", "name"}).AddRow("Jean", "Dupont"))
+
+	mock.ExpectQuery(`SELECT c.contact_id, c.contact_name, c.telegram_chat_id`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"contact_id", "contact_name", "telegram_chat_id", "email", "invite_token",
+		}))
 
 	body := CreateAlertRequest{ConfigID: 0}
 	jsonBody, _ := json.Marshal(body)
@@ -84,19 +109,39 @@ func TestCreateAlert_MissingConfigID(t *testing.T) {
 
 	resp, _ := app.Test(req, -1)
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusBadRequest, resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
 	}
 }
 
-// TestCreateAlert_ConfigNotFound: referencing an unknown configuration returns
-// 404 instead of failing on the foreign key constraint.
+// TestCreateAlert_ConfigNotFound: unknown config_id falls back to the user's config.
 func TestCreateAlert_ConfigNotFound(t *testing.T) {
 	app, mock := setupAlertTestEnv(t)
 
 	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
 		WithArgs(99).
-		WillReturnRows(sqlmock.NewRows([]string{})) // empty row set -> sql.ErrNoRows
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}))
+
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(5))
+
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 5).
+		WillReturnResult(sqlmock.NewResult(9, 1))
+
+	mock.ExpectQuery(`SELECT firstname, name FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"firstname", "name"}).AddRow("Jean", "Dupont"))
+
+	mock.ExpectQuery(`SELECT c.contact_id, c.contact_name, c.telegram_chat_id`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"contact_id", "contact_name", "telegram_chat_id", "email", "invite_token",
+		}))
 
 	body := CreateAlertRequest{ConfigID: 99}
 	jsonBody, _ := json.Marshal(body)
@@ -106,8 +151,11 @@ func TestCreateAlert_ConfigNotFound(t *testing.T) {
 
 	resp, _ := app.Test(req, -1)
 
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusNotFound, resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
 	}
 }
 

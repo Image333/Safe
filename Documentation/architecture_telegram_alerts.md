@@ -79,14 +79,15 @@ L’URL `blob_url` doit être joignable **depuis le serveur API** (c’est lui q
 
 ## Webhook
 
-- Endpoint public : `POST /api/v1/telegram/webhook` (**sans JWT**).
-- Doit être enregistré **avant** le middleware `ProtectedRoute` du groupe `/api/v1` (sinon Telegram reçoit `401`).
-- En local : exposer l’API (ngrok) puis `setWebhook` vers `https://<host>/api/v1/telegram/webhook`.
+- Endpoint public : `POST /api/v1/telegram/webhook` (**sans JWT / X-API-Key**).
+- Protégé par `TELEGRAM_WEBHOOK_SECRET` (header `X-Telegram-Bot-Api-Secret-Token`) — **obligatoire**.
+- Doit être enregistré **avant** `ApiKeyMiddleware` / `ProtectedRoute` sur `/api/v1` (sinon Telegram reçoit `401`).
+- En local : exposer l’API (ngrok) puis `setWebhook` avec `secret_token` vers `https://<host>/api/v1/telegram/webhook`.
 
 ### Liaison
 
-1. `/start <invite_token>` → update `contacts.telegram_chat_id`.
-2. Sinon : clavier « Partager mon numéro » (`request_contact`) → match téléphone normalisé.
+1. `/start <invite_token>` → update `contacts.telegram_chat_id` **seulement si** encore `NULL`.
+2. Sinon : clavier « Partager mon numéro » (`request_contact`) → accepter uniquement le propre numéro du sender, match parmi les contacts non liés.
 
 ## Hors scope MVP
 

@@ -20,11 +20,11 @@ import (
 var nonDigitRE = regexp.MustCompile(`\D+`)
 
 type CreateContactRequest struct {
-	ContactName  string  `json:"contact_name"`
-	PhoneNumber  string  `json:"phone_number"`
-	Email        *string `json:"email"`
-	ContactType  string  `json:"contact_type"`
-	PriorityOrder int    `json:"priority_order"`
+	ContactName   string  `json:"contact_name"`
+	PhoneNumber   string  `json:"phone_number"`
+	Email         *string `json:"email"`
+	ContactType   string  `json:"contact_type"`
+	PriorityOrder int     `json:"priority_order"`
 }
 
 type UpdateContactRequest struct {
@@ -40,27 +40,27 @@ type InviteEmailRequest struct {
 }
 
 type ContactResponse struct {
-	ContactID         int     `json:"contact_id"`
-	ContactName       string  `json:"contact_name"`
-	PhoneNumber       string  `json:"phone_number"`
-	Email             *string `json:"email"`
-	ContactType       *string `json:"contact_type"`
-	PriorityOrder     int     `json:"priority_order"`
-	TelegramLinked    bool    `json:"telegram_linked"`
-	TelegramLinkedAt  *string `json:"telegram_linked_at,omitempty"`
-	InviteToken       string  `json:"invite_token"`
-	InviteLink        string  `json:"invite_link"`
+	ContactID        int     `json:"contact_id"`
+	ContactName      string  `json:"contact_name"`
+	PhoneNumber      string  `json:"phone_number"`
+	Email            *string `json:"email"`
+	ContactType      *string `json:"contact_type"`
+	PriorityOrder    int     `json:"priority_order"`
+	TelegramLinked   bool    `json:"telegram_linked"`
+	TelegramLinkedAt *string `json:"telegram_linked_at,omitempty"`
+	InviteToken      string  `json:"invite_token"`
+	InviteLink       string  `json:"invite_link"`
 }
 
 // RegisterContactRoutes registers trusted-contact endpoints.
-func RegisterContactRoutes(router fiber.Router, db *sql.DB, tg *telegram.Service) {
-	router.Post("/contacts", ProtectedRoute(), createContact(db, tg))
-	router.Get("/contacts", ProtectedRoute(), listContacts(db, tg))
-	router.Get("/contacts/:id", ProtectedRoute(), getContact(db, tg))
-	router.Put("/contacts/:id", ProtectedRoute(), updateContact(db, tg))
-	router.Delete("/contacts/:id", ProtectedRoute(), deleteContact(db))
+func RegisterContactRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler, tg *telegram.Service) {
+	router.Post("/contacts", keyMiddleware, ProtectedRoute(), createContact(db, tg))
+	router.Get("/contacts", keyMiddleware, ProtectedRoute(), listContacts(db, tg))
+	router.Get("/contacts/:id", keyMiddleware, ProtectedRoute(), getContact(db, tg))
+	router.Put("/contacts/:id", keyMiddleware, ProtectedRoute(), updateContact(db, tg))
+	router.Delete("/contacts/:id", keyMiddleware, ProtectedRoute(), deleteContact(db))
 	// Stub for a later SMTP phase — contract frozen.
-	router.Post("/contacts/:id/invite/email", ProtectedRoute(), inviteContactByEmailStub())
+	router.Post("/contacts/:id/invite/email", keyMiddleware, ProtectedRoute(), inviteContactByEmailStub())
 }
 
 func inviteContactByEmailStub() fiber.Handler {
@@ -83,7 +83,7 @@ func createContact(db *sql.DB, tg *telegram.Service) fiber.Handler {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Utilisateur non authentifié"})
 		}
 
-		// JWT peut venir d'une autre DB (ex. cluster distant) alors que l'API locale est vide.
+		// JWT may come from another DB (e.g. remote cluster) while this local API has no user row.
 		var exists int
 		if err := db.QueryRow(`SELECT 1 FROM users WHERE user_id = ?`, userID).Scan(&exists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -194,6 +194,9 @@ func getContact(db *sql.DB, tg *telegram.Service) fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "ID contact invalide"})
 		}
 		userID := getCurrentUserID(c)
+		if code, msg := checkContactOwnership(db, id, userID); code != 0 {
+			return c.Status(code).JSON(fiber.Map{"error": msg})
+		}
 		contact, err := fetchUserContact(db, tg, userID, id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -317,16 +320,26 @@ func deleteContact(db *sql.DB) fiber.Handler {
 }
 
 func checkContactOwnership(db *sql.DB, contactID, userID int) (int, string) {
-	var found int
-	err := db.QueryRow(
-		`SELECT 1 FROM user_contacts WHERE user_id = ? AND contact_id = ?`,
-		userID, contactID,
-	).Scan(&found)
+	var exists int
+	err := db.QueryRow(`SELECT 1 FROM contacts WHERE contact_id = ?`, contactID).Scan(&exists)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.StatusNotFound, "Contact non trouvé"
 		}
 		log.Printf("Erreur checkContactOwnership: %v", err)
+		return fiber.StatusInternalServerError, "Erreur serveur"
+	}
+
+	var linked int
+	err = db.QueryRow(
+		`SELECT 1 FROM user_contacts WHERE user_id = ? AND contact_id = ?`,
+		userID, contactID,
+	).Scan(&linked)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fiber.StatusForbidden, "Ce contact ne vous appartient pas"
+		}
+		log.Printf("Erreur checkContactOwnership link: %v", err)
 		return fiber.StatusInternalServerError, "Erreur serveur"
 	}
 	return 0, ""
@@ -377,12 +390,12 @@ type rowScanner interface {
 
 func scanContact(row rowScanner, tg *telegram.Service) (ContactResponse, error) {
 	var (
-		c          ContactResponse
-		email      sql.NullString
-		ctype      sql.NullString
-		chatID     sql.NullInt64
-		token      sql.NullString
-		linkedAt   sql.NullTime
+		c        ContactResponse
+		email    sql.NullString
+		ctype    sql.NullString
+		chatID   sql.NullInt64
+		token    sql.NullString
+		linkedAt sql.NullTime
 	)
 	err := row.Scan(
 		&c.ContactID, &c.ContactName, &c.PhoneNumber, &email, &ctype, &c.PriorityOrder,

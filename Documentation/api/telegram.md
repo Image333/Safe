@@ -8,7 +8,7 @@ Key points :
 - [setWebhook (ops)](#setwebhook-ops)
 - [Environment](#environment)
 
-> **Important:** cet endpoint est **public** (pas de JWT). Il doit rester enregistré **avant** le middleware `ProtectedRoute` du groupe `/api/v1`, sinon Telegram reçoit `401 Unauthorized` et aucun contact n’est lié.
+> **Important:** this endpoint has **no JWT** and **no X-API-Key**. It must stay registered **before** `ApiKeyMiddleware` / `ProtectedRoute` on `/api/v1`, otherwise Telegram receives `401 Unauthorized` and no contact is linked. Protection is the mandatory `TELEGRAM_WEBHOOK_SECRET`.
 
 Architecture : [architecture_telegram_alerts.md](../architecture_telegram_alerts.md).
 
@@ -22,50 +22,51 @@ Architecture : [architecture_telegram_alerts.md](../architecture_telegram_alerts
 POST /telegram/webhook
 ```
 
-Reçoit les updates Bot API (`message`, `/start`, contact partagé).
+Receives Bot API updates (`message`, `/start`, shared contact).
 
-### Optional secret
+### Required secret
 
-Si `TELEGRAM_WEBHOOK_SECRET` est défini, le header suivant est exigé :
+`TELEGRAM_WEBHOOK_SECRET` **must** be set. Requests without a matching header are rejected with `401`:
 
 ```http
 X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>
 ```
 
-Sinon le secret n’est pas vérifié.
+If the secret env var is empty, every webhook call is rejected.
 
-### Comportement
+### Behaviour
 
 | Event | Action |
 |-------|--------|
-| `/start <invite_token>` | Associe `telegram_chat_id` au contact ayant ce `invite_token` ; message de confirmation |
-| `/start` sans token valide | Propose le clavier « Partager mon numéro » |
-| Message avec `contact` (request_contact) | Match le téléphone normalisé (digits / 9 derniers) puis lie le `chat_id` |
+| `/start <invite_token>` | Links `telegram_chat_id` to the contact with that `invite_token` **only if** not already linked |
+| `/start` without a valid token | Shows the “Share my phone number” keyboard |
+| Message with `contact` (request_contact) | Accepts only when the shared contact is the sender’s own number (`Contact.UserID == From.ID`), then matches phone among unlinked contacts |
 
-Réponse HTTP : toujours `200` vers Telegram après traitement (pour éviter les retries inutiles), même si le token est inconnu.
+HTTP response: always `200` to Telegram after processing (to avoid useless retries), even if the token is unknown — except auth failures on the secret (`401`).
 
 ---
 
 # setWebhook (ops)
 
-Après démarrage de l’API (et tunnel public en local, ex. ngrok) :
+After the API is up (and a public tunnel locally, e.g. ngrok):
 
 ```bash
 curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://<PUBLIC_HOST>/api/v1/telegram/webhook"
+  -d "url=https://<PUBLIC_HOST>/api/v1/telegram/webhook" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
-Vérifier :
+Check:
 
 ```bash
 curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 ```
 
-Champs utiles de `getWebhookInfo` :
+Useful `getWebhookInfo` fields:
 
-- `url` — doit pointer vers votre webhook
-- `last_error_message` — ex. `401 Unauthorized` = middleware JWT encore devant le webhook
-- `pending_update_count` — updates en attente
+- `url` — must point at your webhook
+- `last_error_message` — e.g. `401 Unauthorized` = JWT/API-key middleware still in front of the webhook, or secret mismatch
+- `pending_update_count` — pending updates
 
 ---
 
@@ -73,8 +74,8 @@ Champs utiles de `getWebhookInfo` :
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes (pour envoi) | Token @BotFather |
-| `TELEGRAM_BOT_USERNAME` | Recommended | Username sans `@` (deep-links) |
-| `TELEGRAM_WEBHOOK_SECRET` | No | Secret header Telegram |
+| `TELEGRAM_BOT_TOKEN` | Yes (for sending) | @BotFather token |
+| `TELEGRAM_BOT_USERNAME` | Recommended | Username without `@` (deep-links) |
+| `TELEGRAM_WEBHOOK_SECRET` | **Yes** | Secret header Telegram sends on each update |
 
-Voir aussi `backend/api/.env.example`.
+See also `backend/api/.env.example`.

@@ -16,7 +16,7 @@ import (
 type TelegramUpdate struct {
 	UpdateID int `json:"update_id"`
 	Message  *struct {
-		MessageID int `json:"message_id"`
+		MessageID int    `json:"message_id"`
 		Text      string `json:"text"`
 		Chat      struct {
 			ID int64 `json:"id"`
@@ -31,7 +31,8 @@ type TelegramUpdate struct {
 	} `json:"message"`
 }
 
-// RegisterTelegramRoutes registers the Telegram webhook (no JWT — verified via secret header).
+// RegisterTelegramRoutes registers the Telegram webhook (no JWT / X-API-Key —
+// verified via mandatory secret header).
 func RegisterTelegramRoutes(router fiber.Router, db *sql.DB, tg *telegram.Service) {
 	router.Post("/telegram/webhook", telegramWebhook(db, tg))
 }
@@ -39,11 +40,13 @@ func RegisterTelegramRoutes(router fiber.Router, db *sql.DB, tg *telegram.Servic
 func telegramWebhook(db *sql.DB, tg *telegram.Service) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		secret := os.Getenv("TELEGRAM_WEBHOOK_SECRET")
-		if secret != "" {
-			got := c.Get("X-Telegram-Bot-Api-Secret-Token")
-			if got != secret {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "secret invalide"})
-			}
+		if secret == "" {
+			log.Printf("telegram webhook: TELEGRAM_WEBHOOK_SECRET is not set")
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "webhook secret non configuré"})
+		}
+		got := c.Get("X-Telegram-Bot-Api-Secret-Token")
+		if got != secret {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "secret invalide"})
 		}
 
 		var update TelegramUpdate
@@ -72,13 +75,13 @@ func telegramWebhook(db *sql.DB, tg *telegram.Service) fiber.Handler {
 					return c.SendStatus(fiber.StatusOK)
 				}
 				if ok {
-					log.Printf("telegram: contact lié via invite_token (chat_id=%d)", chatID)
+					log.Printf("telegram: contact linked via invite_token (chat_id=%d)", chatID)
 					if tg != nil {
 						_ = tg.SendMessage(chatID, "✅ Compte lié à SAFE. Vous recevrez les alertes d'urgence ici.")
 					}
 					return c.SendStatus(fiber.StatusOK)
 				}
-				log.Printf("telegram: invite_token inconnu %q (chat_id=%d)", token, chatID)
+				log.Printf("telegram: unknown or already-linked invite_token %q (chat_id=%d)", token, chatID)
 			}
 			// No/invalid token → ask to share phone
 			if tg != nil {
@@ -90,8 +93,18 @@ func telegramWebhook(db *sql.DB, tg *telegram.Service) fiber.Handler {
 			return c.SendStatus(fiber.StatusOK)
 		}
 
-		// Contact shared via request_contact
+		// Contact shared via request_contact — require proof of possession.
 		if update.Message.Contact != nil {
+			if update.Message.From == nil ||
+				update.Message.Contact.UserID == 0 ||
+				update.Message.Contact.UserID != update.Message.From.ID {
+				log.Printf("telegram: rejected phone share without possession proof (chat_id=%d)", chatID)
+				if tg != nil {
+					_ = tg.RemoveKeyboard(chatID, "❌ Partagez votre propre numéro via le bouton Telegram (pas un contact de l'annuaire).")
+				}
+				return c.SendStatus(fiber.StatusOK)
+			}
+
 			phone := update.Message.Contact.PhoneNumber
 			ok, err := linkContactByPhone(db, phone, chatID)
 			if err != nil {
@@ -114,7 +127,8 @@ func telegramWebhook(db *sql.DB, tg *telegram.Service) fiber.Handler {
 
 func linkContactByInviteToken(db *sql.DB, token string, chatID int64) (bool, error) {
 	res, err := db.Exec(
-		`UPDATE contacts SET telegram_chat_id = ?, telegram_linked_at = ? WHERE invite_token = ?`,
+		`UPDATE contacts SET telegram_chat_id = ?, telegram_linked_at = ?
+		 WHERE invite_token = ? AND telegram_chat_id IS NULL`,
 		chatID, time.Now().UTC(), token,
 	)
 	if err != nil {
@@ -125,7 +139,11 @@ func linkContactByInviteToken(db *sql.DB, token string, chatID int64) (bool, err
 }
 
 func linkContactByPhone(db *sql.DB, phone string, chatID int64) (bool, error) {
-	rows, err := db.Query(`SELECT contact_id, phone_number, telegram_chat_id FROM contacts`)
+	// Only unlinked contacts — avoids full-table scan of already-linked rows
+	// and prevents hijacking an existing telegram_chat_id.
+	rows, err := db.Query(
+		`SELECT contact_id, phone_number FROM contacts WHERE telegram_chat_id IS NULL`,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -137,9 +155,8 @@ func linkContactByPhone(db *sql.DB, phone string, chatID int64) (bool, error) {
 		var (
 			id     int
 			stored string
-			chat   sql.NullInt64
 		)
-		if err := rows.Scan(&id, &stored, &chat); err != nil {
+		if err := rows.Scan(&id, &stored); err != nil {
 			return false, err
 		}
 		if PhonesMatch(phone, stored) {
@@ -155,9 +172,14 @@ func linkContactByPhone(db *sql.DB, phone string, chatID int64) (bool, error) {
 		return false, nil
 	}
 
-	_, err = db.Exec(
-		`UPDATE contacts SET telegram_chat_id = ?, telegram_linked_at = ? WHERE contact_id = ?`,
+	res, err := db.Exec(
+		`UPDATE contacts SET telegram_chat_id = ?, telegram_linked_at = ?
+		 WHERE contact_id = ? AND telegram_chat_id IS NULL`,
 		chatID, time.Now().UTC(), matchID,
 	)
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }

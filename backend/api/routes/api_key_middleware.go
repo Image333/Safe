@@ -4,8 +4,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// ApiKeyMiddleware protège tous les endpoints avec une clé API
-// Deux clés sont acceptées : une pour l'application mobile, une pour les développeurs
+// ApiKeyMiddleware protects endpoints with an API key.
+// Two keys are accepted: one for the mobile app, one for developers.
 func ApiKeyMiddleware(appKey, devKey string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		apiKey := c.Get("X-API-Key")
