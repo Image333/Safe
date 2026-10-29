@@ -1,4 +1,3 @@
-import '../config/api_config.dart';
 import '../storage/auth_storage.dart';
 import 'api_service.dart';
 import 'minio_upload_service.dart';
@@ -53,11 +52,12 @@ class AudioSyncService {
         _authStorage = authStorage ?? AuthStorage();
 
   /// Si non authentifié → local only.
-  /// Si authentifié → MinIO puis POST /alerts/:stubAlertId/audio.
+  /// Si authentifié → MinIO puis POST /alerts/:alertId/audio.
   /// En cas d'échec → fallback local (fichier déjà sur disque).
   Future<AudioSyncResult> syncEmergencyClip({
     required String localFilePath,
     required int durationSec,
+    int? alertId,
   }) async {
     final isAuthenticated = await _auth.isAuthenticated();
     if (!isAuthenticated) {
@@ -79,10 +79,19 @@ class AudioSyncService {
         objectKey: objectKey,
       );
 
-      // TODO: remplacer stubAlertId par l'ID renvoyé par POST /alerts
+      var resolvedAlertId = (alertId != null && alertId > 0) ? alertId : 0;
+      if (resolvedAlertId <= 0) {
+        // Pas d'alerte fournie : on en crée une pour notifier Telegram + lier l'audio.
+        final alert = await _apiService.createAlert(token: token);
+        resolvedAlertId = alert.alertId;
+      }
+      if (resolvedAlertId <= 0) {
+        return AudioSyncResult.failed('Impossible de lier l\'audio à une alerte');
+      }
+
       final createResponse = await _apiService.createAudio(
         token: token,
-        alertId: ApiConfig.stubAlertId,
+        alertId: resolvedAlertId,
         blobUrl: blobUrl,
         duration: durationSec > 0 ? durationSec : 1,
         format: 'm4a',

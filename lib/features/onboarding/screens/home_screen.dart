@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/api_service.dart';
 import '../../../core/services/emergency_audio_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/services/native_volume_trigger_service.dart';
@@ -20,6 +21,7 @@ class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   bool _isProtected = false;
   bool _alertSent = false;
+  String? _alertFeedback;
   bool _isRecordingClip = false;
   bool _voiceArmed = false;
   bool _voiceActive = false;
@@ -33,6 +35,8 @@ class _HomeScreenState extends State<HomeScreen>
   late final NativeVolumeTriggerService _nativeVolumeTriggerService;
   final AudioHistoryService _audioHistoryService = AudioHistoryService();
   final AudioSyncService _audioSyncService = AudioSyncService();
+  final AuthService _authService = AuthService();
+  final ApiService _apiService = ApiService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -295,20 +299,63 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  void _triggerAlert() {
-    setState(() => _alertSent = true);
-    _recordEmergencyClip();
+  Future<void> _triggerAlert() async {
+    setState(() {
+      _alertSent = true;
+      _alertFeedback = null;
+    });
 
-    // TODO : appel backend Go + GPS + envoi aux contacts
-    // Note: Le message de confirmation sera affiché après l'enregistrement
+    int? alertId;
+    String? notifyFeedback;
 
-    // Reset après 5 secondes
+    try {
+      final token = await _authService.getToken();
+      if (token != null && token.isNotEmpty) {
+        final alert = await _apiService.createAlert(token: token);
+        alertId = alert.alertId;
+        final sent = alert.sentCount;
+        final notLinked = alert.notLinkedCount;
+        if (sent > 0 && notLinked == 0) {
+          notifyFeedback = 'Alerte envoyée à $sent contact(s) Telegram';
+        } else if (sent > 0) {
+          notifyFeedback =
+              'Alerte envoyée à $sent contact(s). $notLinked non lié(s) — invitez-les sur Telegram';
+        } else if (notLinked > 0) {
+          notifyFeedback =
+              'Aucun contact Telegram lié. Invitez vos proches depuis Contacts';
+        } else {
+          notifyFeedback = 'Alerte créée — aucun contact configuré';
+        }
+      } else {
+        notifyFeedback =
+            'Connectez-vous pour alerter vos contacts. Audio enregistré localement.';
+      }
+    } catch (e) {
+      notifyFeedback = e is ApiException
+          ? e.message
+          : 'Impossible d\'alerter les contacts';
+      if (kDebugMode) {
+        print('createAlert error: $e');
+      }
+    }
+
+    if (mounted) {
+      setState(() => _alertFeedback = notifyFeedback);
+    }
+
+    await _recordEmergencyClip(alertId: alertId);
+
     Future.delayed(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _alertSent = false);
+      if (mounted) {
+        setState(() {
+          _alertSent = false;
+          _alertFeedback = null;
+        });
+      }
     });
   }
 
-  Future<void> _recordEmergencyClip() async {
+  Future<void> _recordEmergencyClip({int? alertId}) async {
     if (_isRecordingClip) return;
 
     setState(() => _isRecordingClip = true);
@@ -324,10 +371,10 @@ class _HomeScreenState extends State<HomeScreen>
       if (!mounted) return;
       setState(() => _lastClipPath = path);
 
-      // Sync remote si compte connecté (sinon reste local)
       final syncResult = await _audioSyncService.syncEmergencyClip(
         localFilePath: path,
         durationSec: durationSec,
+        alertId: alertId,
       );
 
       if (!mounted) return;
@@ -720,16 +767,23 @@ class _HomeScreenState extends State<HomeScreen>
 
   // ── Label sous le bouton ──────────────────────────────────────────────────
   Widget _buildAlertLabel() {
+    final label = _alertSent
+        ? (_alertFeedback ?? 'Alerte en cours…')
+        : (_isProtected
+            ? 'Appuyez pour déclencher une alerte'
+            : 'Activez la protection pour utiliser Safe');
+
     return Column(children: [
-      Text(
-        _alertSent
-          ? 'Vos contacts ont été alertés'
-          : (_isProtected ? 'Appuyez pour déclencher une alerte' : 'Activez la protection pour utiliser Safe'),
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          fontSize: 15,
-          color: _alertSent ? AppColors.red : AppColors.grayMid,
-          fontWeight: _alertSent ? FontWeight.w600 : FontWeight.normal,
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 15,
+            color: _alertSent ? AppColors.red : AppColors.grayMid,
+            fontWeight: _alertSent ? FontWeight.w600 : FontWeight.normal,
+          ),
         ),
       ),
       if (_isProtected && !_alertSent) ...[

@@ -3,8 +3,11 @@ package routes
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"strconv"
+
+	"gpe/telegram"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -27,13 +30,12 @@ type CreateAudioRequest struct {
 	Format   string `json:"format"`
 }
 
-// RegisterAudioRoutes enregistre tous les endpoints audio
-func RegisterAudioRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler) {
-
+// RegisterAudioRoutes registers all audio endpoints (CRUD + Telegram fan-out on create).
+func RegisterAudioRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler, tg *telegram.Service) {
 	router.Get("/audio/:id", keyMiddleware, ProtectedRoute(), getAudioByID(db))
 	router.Get("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), getAudioByAlert(db))
 	router.Get("/me/audio", keyMiddleware, ProtectedRoute(), getMyAudio(db))
-	router.Post("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), createAudio(db))
+	router.Post("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), createAudio(db, tg))
 }
 
 // GET /api/v1/audio/:id — Récupère un enregistrement audio par son ID
@@ -187,7 +189,7 @@ func getMyAudio(db *sql.DB) fiber.Handler {
 }
 
 // POST /api/v1/alerts/:alertId/audio — Ajoute un enregistrement audio à une alerte
-func createAudio(db *sql.DB) fiber.Handler {
+func createAudio(db *sql.DB, tg *telegram.Service) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		alertID, err := strconv.Atoi(c.Params("alertId"))
 		if err != nil {
@@ -196,13 +198,11 @@ func createAudio(db *sql.DB) fiber.Handler {
 
 		userID := getCurrentUserID(c)
 
-		// Parser le body en premier (avant les requêtes DB)
 		var req CreateAudioRequest
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
 		}
 
-		// Validation
 		switch {
 		case req.BlobURL == "":
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "blob_url requis"})
@@ -212,7 +212,6 @@ func createAudio(db *sql.DB) fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "format requis"})
 		}
 
-		// Vérifier que l'alerte existe et appartient à l'utilisateur
 		var ownerID int
 		checkQuery := `SELECT user_id FROM alerts WHERE alert_id = ?`
 		err = db.QueryRow(checkQuery, alertID).Scan(&ownerID)
@@ -228,7 +227,6 @@ func createAudio(db *sql.DB) fiber.Handler {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Cette alerte ne vous appartient pas"})
 		}
 
-		// Vérifier qu'il n'y a pas déjà un audio pour cette alerte (UNIQUE)
 		var existingCount int
 		countQuery := `SELECT COUNT(*) FROM audio_records WHERE alert_id = ?`
 		err = db.QueryRow(countQuery, alertID).Scan(&existingCount)
@@ -240,7 +238,6 @@ func createAudio(db *sql.DB) fiber.Handler {
 			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Un enregistrement audio existe déjà pour cette alerte"})
 		}
 
-		// Insérer
 		insertQuery := `
 			INSERT INTO audio_records (blob_url, duration, format, alert_id)
 			VALUES (?, ?, ?, ?)
@@ -254,6 +251,12 @@ func createAudio(db *sql.DB) fiber.Handler {
 
 		newID, _ := result.LastInsertId()
 
+		// Fan-out audio clip to linked Telegram contacts (same behaviour as before main merge).
+		if tg != nil {
+			userName := loadUserDisplayName(db, userID)
+			go notifyTrustedContactsAudio(db, tg, userID, userName, alertID, req.BlobURL)
+		}
+
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"message":  "Enregistrement audio créé avec succès",
 			"audio_id": newID,
@@ -261,16 +264,40 @@ func createAudio(db *sql.DB) fiber.Handler {
 	}
 }
 
-// getCurrentUserID extrait le user_id du contexte JWT
-// Retourne un int (le JWT stocke les nombres en float64, on convertit)
-func getCurrentUserID(c *fiber.Ctx) int {
-	userID := c.Locals("user_id")
-	switch v := userID.(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	default:
-		return 0
+func notifyTrustedContactsAudio(db *sql.DB, tg *telegram.Service, userID int, userName string, alertID int, blobURL string) {
+	rows, err := db.Query(`
+		SELECT c.contact_id, c.contact_name, c.telegram_chat_id
+		FROM contacts c
+		INNER JOIN user_contacts uc ON uc.contact_id = c.contact_id
+		WHERE uc.user_id = ? AND c.telegram_chat_id IS NOT NULL`, userID)
+	if err != nil {
+		log.Printf("notifyTrustedContactsAudio query: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	caption := fmt.Sprintf(
+		"🎤 <b>Enregistrement d'urgence</b>\n\n%s — alerte #%d",
+		userName, alertID,
+	)
+
+	for rows.Next() {
+		var (
+			contactID int
+			name      string
+			chatID    sql.NullInt64
+		)
+		if err := rows.Scan(&contactID, &name, &chatID); err != nil {
+			log.Printf("notify audio scan: %v", err)
+			continue
+		}
+		if !chatID.Valid || tg == nil {
+			continue
+		}
+		if err := tg.SendAudio(chatID.Int64, blobURL, caption); err != nil {
+			log.Printf("telegram SendAudio contact=%d (%s): %v", contactID, name, err)
+		} else {
+			log.Printf("telegram SendAudio OK contact=%d (%s) alert=#%d", contactID, name, alertID)
+		}
 	}
 }

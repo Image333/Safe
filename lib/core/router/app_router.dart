@@ -24,7 +24,11 @@ class AppRouter {
     switch (settings.name) {
       case welcome:          return _fade(const WelcomeScreen());
       case profile:          return _fade(const ProfileScreen());
-      case contacts:         return _fade(const ContactsScreen());
+      case contacts:
+        final contactsMode = settings.arguments is ContactsScreenMode
+            ? settings.arguments as ContactsScreenMode
+            : ContactsScreenMode.onboarding;
+        return _fade(ContactsScreen(mode: contactsMode));
       case trigger:          return _fade(const TriggerScreen());
       case pin:              return _fade(const PinScreen(mode: PinScreenMode.config));
       case unlock:           return _fade(const PinScreen(mode: PinScreenMode.unlock));
