@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"gpe/telegram"
 
@@ -20,8 +21,29 @@ var allowedAlertStatuses = map[string]bool{
 	"CANCELLED": true,
 }
 
+var parisLocation *time.Location
+
+func init() {
+	loc, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		parisLocation = time.FixedZone("CET", 3600)
+		return
+	}
+	parisLocation = loc
+}
+
 type CreateAlertRequest struct {
-	ConfigID int `json:"config_id"`
+	ConfigID  int      `json:"config_id"`
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
+	Trigger   string   `json:"trigger"`
+}
+
+// alertNotifyOpts carries optional context for the Telegram fan-out.
+type alertNotifyOpts struct {
+	Trigger   string
+	Latitude  *float64
+	Longitude *float64
 }
 
 type UpdateAlertRequest struct {
@@ -81,8 +103,23 @@ func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
 		}
 		alertID, _ := result.LastInsertId()
 
+		opts := alertNotifyOpts{Trigger: strings.TrimSpace(strings.ToLower(req.Trigger))}
+		if validCoords(req.Latitude, req.Longitude) {
+			opts.Latitude = req.Latitude
+			opts.Longitude = req.Longitude
+			if _, err := db.Exec(
+				`INSERT INTO geolocations (latitude, longitude, alert_id) VALUES (?, ?, ?)`,
+				*req.Latitude, *req.Longitude, alertID,
+			); err != nil {
+				log.Printf("Erreur SQL INSERT geolocation: %v", err)
+				// Non-blocking: alert + Telegram still proceed without pin.
+				opts.Latitude = nil
+				opts.Longitude = nil
+			}
+		}
+
 		userName := loadUserDisplayName(db, userID)
-		notifications := notifyTrustedContacts(db, tg, userID, userName, int(alertID))
+		notifications := notifyTrustedContacts(db, tg, userID, userName, int(alertID), opts)
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"message":       "Alerte créée avec succès",
@@ -90,6 +127,42 @@ func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
 			"notifications": notifications,
 		})
 	}
+}
+
+func validCoords(lat, lng *float64) bool {
+	if lat == nil || lng == nil {
+		return false
+	}
+	return *lat >= -90 && *lat <= 90 && *lng >= -180 && *lng <= 180
+}
+
+func triggerLabel(trigger string) string {
+	switch strings.ToLower(strings.TrimSpace(trigger)) {
+	case "volume":
+		return "Volume"
+	case "voice":
+		return "Mot-clé vocal"
+	case "sos":
+		return "Bouton SOS"
+	default:
+		return "Alerte d'urgence"
+	}
+}
+
+func buildAlertTelegramMessage(userName string, opts alertNotifyOpts) string {
+	var b strings.Builder
+	b.WriteString("🚨 <b>URGENCE — SAFE</b>\n\n")
+	b.WriteString(fmt.Sprintf("%s a besoin d'aide maintenant.\n", userName))
+	b.WriteString(fmt.Sprintf("📅 %s\n", time.Now().In(parisLocation).Format("02/01/2006 · 15:04")))
+	b.WriteString(fmt.Sprintf("⚡ Déclenchement : %s\n", triggerLabel(opts.Trigger)))
+	if validCoords(opts.Latitude, opts.Longitude) {
+		b.WriteString(fmt.Sprintf(
+			"\n📍 Ouvrir la position :\nhttps://maps.google.com/?q=%g,%g\n",
+			*opts.Latitude, *opts.Longitude,
+		))
+	}
+	b.WriteString("\n🎤 Un enregistrement audio suivra.")
+	return b.String()
 }
 
 func resolveConfigID(db *sql.DB, userID, requested int) (int, error) {
@@ -138,7 +211,7 @@ func loadUserDisplayName(db *sql.DB, userID int) string {
 	return full
 }
 
-func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userName string, alertID int) []NotifyResult {
+func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userName string, alertID int, opts alertNotifyOpts) []NotifyResult {
 	rows, err := db.Query(`
 		SELECT c.contact_id, c.contact_name, c.telegram_chat_id, c.email, c.invite_token
 		FROM contacts c
@@ -150,10 +223,8 @@ func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userNam
 	}
 	defer rows.Close()
 
-	msg := fmt.Sprintf(
-		"🚨 <b>Alerte SAFE</b>\n\n%s a déclenché une alerte d'urgence.\nAlerte #%d\n\n🎤 Un enregistrement audio suivra dès qu'il sera disponible.",
-		userName, alertID,
-	)
+	msg := buildAlertTelegramMessage(userName, opts)
+	hasPin := validCoords(opts.Latitude, opts.Longitude)
 
 	results := []NotifyResult{}
 	for rows.Next() {
@@ -182,6 +253,11 @@ func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userNam
 			} else {
 				r.Status = "sent"
 				r.Channel = "telegram"
+				if hasPin {
+					if err := tg.SendLocation(chatID.Int64, *opts.Latitude, *opts.Longitude); err != nil {
+						log.Printf("telegram sendLocation chat=%d: %v", chatID.Int64, err)
+					}
+				}
 			}
 		} else if chatID.Valid && tg == nil {
 			r.Status = "error"
