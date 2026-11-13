@@ -159,6 +159,97 @@ func TestCreateAlert_ConfigNotFound(t *testing.T) {
 	}
 }
 
+// TestCreateAlert_WithGeolocation: lat/lng persist in geolocations then notify runs.
+func TestCreateAlert_WithGeolocation(t *testing.T) {
+	app, mock := setupAlertTestEnv(t)
+
+	lat, lng := 48.8566, 2.3522
+
+	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
+		WithArgs(2).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
+
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(10, 1))
+
+	mock.ExpectExec(`INSERT INTO geolocations`).
+		WithArgs(lat, lng, int64(10)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mock.ExpectQuery(`SELECT firstname, name FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"firstname", "name"}).AddRow("Marie", "Dupont"))
+
+	mock.ExpectQuery(`SELECT c.contact_id, c.contact_name, c.telegram_chat_id`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"contact_id", "contact_name", "telegram_chat_id", "email", "invite_token",
+		}))
+
+	body := CreateAlertRequest{
+		ConfigID:  2,
+		Latitude:  &lat,
+		Longitude: &lng,
+		Trigger:   "sos",
+	}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/alerts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+generateTestJWT(t, 1, "jean@etna.fr"))
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("Erreur requête: %s", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
+	}
+}
+
+// TestCreateAlert_WithoutGeolocation: missing coords skip geolocations insert.
+func TestCreateAlert_WithoutGeolocation(t *testing.T) {
+	app, mock := setupAlertTestEnv(t)
+
+	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
+		WithArgs(2).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
+
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(11, 1))
+
+	mock.ExpectQuery(`SELECT firstname, name FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"firstname", "name"}).AddRow("Marie", "Dupont"))
+
+	mock.ExpectQuery(`SELECT c.contact_id, c.contact_name, c.telegram_chat_id`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"contact_id", "contact_name", "telegram_chat_id", "email", "invite_token",
+		}))
+
+	body := CreateAlertRequest{ConfigID: 2, Trigger: "volume"}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/alerts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+generateTestJWT(t, 1, "jean@etna.fr"))
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("Erreur requête: %s", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
+	}
+}
+
 // TestCreateAlert_InvalidJSON: a malformed body is rejected with 400.
 func TestCreateAlert_InvalidJSON(t *testing.T) {
 	app, _ := setupAlertTestEnv(t)
