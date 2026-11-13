@@ -49,12 +49,13 @@ Sur l’écran Contacts :
 
 ### Alerte runtime
 
-1. `_triggerAlert` / voice trigger → `POST /api/v1/alerts` (JWT).
-2. Le backend fan-out `sendMessage` aux contacts liés (texte + mention qu’un enregistrement suivra).
-3. Réponse : `notifications[]` avec `status` = `sent` | `not_linked` | `error`.
-4. L’UI affiche un feedback réel (plus de faux « contacts alertés »).
-5. Enregistrement local → upload MinIO → `POST /api/v1/alerts/:id/audio`.
-6. Le backend fan-out `SendAudio` (télécharge `blob_url`, multipart Bot API) aux mêmes contacts liés.
+1. `_triggerAlert` / voice trigger → `POST /api/v1/alerts` (JWT) avec optionnellement `latitude`, `longitude`, `trigger` (`sos` | `volume` | `voice`).
+2. Si coords valides → INSERT `geolocations` (1:1 avec l’alerte, pas de route dédiée).
+3. Le backend fan-out `sendMessage` (texte enrichi : urgence, heure Paris, type de déclenchement, lien Maps si GPS) puis `sendLocation` (pin natif) si coords présentes.
+4. Réponse : `notifications[]` avec `status` = `sent` | `not_linked` | `error`.
+5. L’UI affiche un feedback réel (plus de faux « contacts alertés »).
+6. Enregistrement local → upload MinIO → `POST /api/v1/alerts/:id/audio`.
+7. Le backend fan-out `SendAudio` (télécharge `blob_url`, multipart Bot API) aux mêmes contacts liés.
 
 ### Dépendance MinIO
 
@@ -73,8 +74,8 @@ L’URL `blob_url` doit être joignable **depuis le serveur API** (c’est lui q
 
 | Couche | Fichiers / rôle |
 |--------|------------------|
-| Backend | `backend/api/telegram` (`SendMessage`, `SendAudio`), `routes/contacts.go`, `routes/telegram_webhook.go`, `routes/alert.go`, `routes/audio.go` |
-| Flutter | `TrustedContactsService`, `TelegramInviteSheet`, `_triggerAlert` / `AudioSyncService` / `MinioUploadService`, `VoiceTriggerService` |
+| Backend | `backend/api/telegram` (`SendMessage`, `SendLocation`, `SendAudio`), `routes/contacts.go`, `routes/telegram_webhook.go`, `routes/alert.go`, `routes/audio.go` |
+| Flutter | `LocationService`, `TrustedContactsService`, `TelegramInviteSheet`, `_triggerAlert` / `AudioSyncService` / `MinioUploadService`, `VoiceTriggerService` |
 | Config | `TELEGRAM_*` via `.env` API ; MinIO via `ApiConfig` / `--dart-define=MINIO_*` |
 
 ## Webhook
@@ -92,7 +93,8 @@ L’URL `blob_url` doit être joignable **depuis le serveur API** (c’est lui q
 ## Hors scope MVP
 
 - Envoi SMTP réel de l’invitation / de l’alerte
-- GPS dans le message
+- Reverse geocoding / adresse textuelle
+- Boutons inline Telegram / mise à jour live de position
 - Lookup Telegram par téléphone/email (impossible via Bot API)
 - Appel Bot API depuis Flutter (token serveur uniquement)
 
