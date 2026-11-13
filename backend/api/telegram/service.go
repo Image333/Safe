@@ -92,6 +92,36 @@ func (s *Service) SendMessage(chatID int64, text string) error {
 	return nil
 }
 
+// SendLocation sends a native map pin to a Telegram chat.
+func (s *Service) SendLocation(chatID int64, latitude, longitude float64) error {
+	if s == nil || s.token == "" {
+		return fmt.Errorf("telegram non configuré")
+	}
+
+	payload := map[string]any{
+		"chat_id":   chatID,
+		"latitude":  latitude,
+		"longitude": longitude,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendLocation", s.token)
+	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("telegram sendLocation %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 // SendContactRequestKeyboard asks the user to share their phone number.
 func (s *Service) SendContactRequestKeyboard(chatID int64, text string) error {
 	if s == nil || s.token == "" {
