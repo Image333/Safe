@@ -50,6 +50,8 @@
 	</dict>
 	<key>NSContactsUsageDescription</key>
 	<string>Safe a besoin d'accéder à vos contacts pour vous permettre de choisir vos contacts de confiance.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Safe utilise votre position pour l'envoyer à vos contacts de confiance en cas d'alerte d'urgence.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Safe utilise le micro pour détecter votre mot-clé de sécurité et lancer un enregistrement d'urgence.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
