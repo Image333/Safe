@@ -9,6 +9,7 @@ import '../../../core/services/voice_trigger_service.dart';
 import '../../../core/services/native_volume_trigger_service.dart';
 import '../../../core/services/audio_history_service.dart';
 import '../../../core/services/audio_sync_service.dart';
+import '../../../core/services/location_service.dart';
 import '../../settings/auth_bottom_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -37,6 +38,7 @@ class _HomeScreenState extends State<HomeScreen>
   final AudioSyncService _audioSyncService = AudioSyncService();
   final AuthService _authService = AuthService();
   final ApiService _apiService = ApiService();
+  final LocationService _locationService = LocationService();
 
   // Animations de pulsation
   late AnimationController _pulseController1;
@@ -195,7 +197,7 @@ class _HomeScreenState extends State<HomeScreen>
           onTriplePress: () {
             // Appelé quand une triple pression est détectée
             if (mounted) {
-              _triggerAlert();
+              _triggerAlert(trigger: 'volume');
             }
           },
         );
@@ -265,7 +267,7 @@ class _HomeScreenState extends State<HomeScreen>
             setLocal(() => countdown--);
             if (countdown <= 0) {
               Navigator.of(ctx).pop();
-              _triggerAlert();
+              _triggerAlert(trigger: 'sos');
             }
           });
 
@@ -299,7 +301,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Future<void> _triggerAlert() async {
+  Future<void> _triggerAlert({String trigger = 'sos'}) async {
     setState(() {
       _alertSent = true;
       _alertFeedback = null;
@@ -311,7 +313,13 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       final token = await _authService.getToken();
       if (token != null && token.isNotEmpty) {
-        final alert = await _apiService.createAlert(token: token);
+        final position = await _locationService.getCurrentPosition();
+        final alert = await _apiService.createAlert(
+          token: token,
+          latitude: position?.latitude,
+          longitude: position?.longitude,
+          trigger: trigger,
+        );
         alertId = alert.alertId;
         final sent = alert.sentCount;
         final notLinked = alert.notLinkedCount;
