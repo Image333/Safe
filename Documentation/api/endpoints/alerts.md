@@ -47,17 +47,23 @@ Authorization: Bearer <token>
 
 ### Parameters
 
-| Field     | Type    | Required | Description                                             |
-| --------- | ------- | -------- | ------------------------------------------------------- |
-| config_id | integer | Yes      | ID of an existing configuration to attach to the alert  |
+| Field     | Type    | Required | Description                                                              |
+| --------- | ------- | -------- | ------------------------------------------------------------------------ |
+| config_id | integer | No       | ID of an existing configuration; falls back to user config if omitted    |
+| latitude  | number  | No       | GPS latitude (−90…90); with longitude, stored in `geolocations` + pin TG |
+| longitude | number  | No       | GPS longitude (−180…180)                                                 |
+| trigger   | string  | No       | Alert source: `sos` \| `volume` \| `voice`                               |
 
-> **Note:** `user_id` is **not** part of the body — it is taken from the JWT.
+> **Note:** `user_id` is **not** part of the body — it is taken from the JWT. There is **no** separate `/geolocations` endpoint.
 
 ### Example
 
 ```json
 {
-  "config_id": 2
+  "config_id": 2,
+  "latitude": 48.8566,
+  "longitude": 2.3522,
+  "trigger": "sos"
 }
 ```
 

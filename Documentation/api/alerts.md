@@ -15,7 +15,7 @@ Key points :
 
 > See: **[JWT Authentication](./users.md#authentication---user-login)**
 
-Après création, le backend notifie les contacts Telegram **liés** (`sendMessage`, texte + mention qu’un enregistrement suivra). L’audio part ensuite via [POST /alerts/:id/audio](./audio.md) une fois MinIO OK. Voir [Architecture Telegram](../architecture_telegram_alerts.md).
+Après création, le backend notifie les contacts Telegram **liés** (`sendMessage` enrichi + `sendLocation` si GPS). L’audio part ensuite via [POST /alerts/:id/audio](./audio.md) une fois MinIO OK. Voir [Architecture Telegram](../architecture_telegram_alerts.md).
 
 ---
 
@@ -27,13 +27,16 @@ Après création, le backend notifie les contacts Telegram **liés** (`sendMessa
 POST /alerts
 ```
 
-Crée une alerte pour l’utilisateur authentifié (statut initial `TRIGGERED`), résout / crée une `config_id` si besoin, puis fan-out Telegram.
+Crée une alerte pour l’utilisateur authentifié (statut initial `TRIGGERED`), résout / crée une `config_id` si besoin, enregistre optionnellement la géoloc dans `geolocations`, puis fan-out Telegram.
 
 ### Request Body
 
 | Field     | Type    | Required | Description                                                                 |
 | --------- | ------- | -------- | --------------------------------------------------------------------------- |
 | config_id | integer | No       | Configuration existante. Si absent / invalide, config user ou création auto |
+| latitude  | number  | No       | Latitude GPS (−90…90). Avec `longitude`, INSERT `geolocations` + pin Telegram |
+| longitude | number  | No       | Longitude GPS (−180…180)                                                    |
+| trigger   | string  | No       | Source : `sos` \| `volume` \| `voice` (libellé dans le message Telegram)    |
 
 ### Example
 
@@ -45,7 +48,10 @@ ou
 
 ```json
 {
-  "config_id": 2
+  "config_id": 2,
+  "latitude": 48.8566,
+  "longitude": 2.3522,
+  "trigger": "sos"
 }
 ```
 
