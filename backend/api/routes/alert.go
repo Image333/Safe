@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// allowedAlertStatuses lists the accepted alert statuses
 var allowedAlertStatuses = map[string]bool{
 	"PENDING":   true,
 	"TRIGGERED": true,
@@ -32,6 +34,7 @@ func init() {
 	parisLocation = loc
 }
 
+// CreateAlertRequest is the payload for creating an alert
 type CreateAlertRequest struct {
 	ConfigID  int      `json:"config_id"`
 	Latitude  *float64 `json:"latitude"`
@@ -46,10 +49,12 @@ type alertNotifyOpts struct {
 	Longitude *float64
 }
 
+// UpdateAlertRequest is the payload for updating an alert
 type UpdateAlertRequest struct {
 	Status string `json:"status"`
 }
 
+// AlertResponse is an alert returned by the API
 type AlertResponse struct {
 	AlertID   int    `json:"alert_id"`
 	Timestamp string `json:"timestamp"`
@@ -58,6 +63,7 @@ type AlertResponse struct {
 	ConfigID  int    `json:"config_id"`
 }
 
+// NotifyResult is the Telegram delivery outcome for one trusted contact
 type NotifyResult struct {
 	ContactID   int    `json:"contact_id"`
 	ContactName string `json:"contact_name"`
@@ -66,7 +72,7 @@ type NotifyResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// RegisterAlertRoutes registers alert endpoints with Telegram fan-out on create.
+// RegisterAlertRoutes registers all alert endpoints
 func RegisterAlertRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler, tg *telegram.Service) {
 	router.Post("/alerts", keyMiddleware, ProtectedRoute(), createAlert(db, tg))
 	router.Get("/alerts", keyMiddleware, ProtectedRoute(), listAlerts(db))
@@ -75,6 +81,8 @@ func RegisterAlertRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Ha
 	router.Delete("/alerts/:id", keyMiddleware, ProtectedRoute(), deleteAlert(db))
 }
 
+// POST /api/v1/alerts — Creates an alert owned by the authenticated user,
+// then notifies the trusted contacts linked to Telegram
 func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := getCurrentUserID(c)
@@ -87,35 +95,24 @@ func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
 		}
 
+		// config_id is optional: falls back to the user's configuration (FK config_id NOT NULL)
 		configID, err := resolveConfigID(db, userID, req.ConfigID)
 		if err != nil {
 			log.Printf("resolveConfigID: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de résoudre la configuration"})
 		}
 
-		result, err := db.Exec(
-			`INSERT INTO alerts (user_id, config_id, status) VALUES (?, ?, 'TRIGGERED')`,
-			userID, configID,
-		)
-		if err != nil {
-			log.Printf("Erreur SQL INSERT alerte: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de créer l'alerte"})
-		}
-		alertID, _ := result.LastInsertId()
-
 		opts := alertNotifyOpts{Trigger: strings.TrimSpace(strings.ToLower(req.Trigger))}
 		if validCoords(req.Latitude, req.Longitude) {
 			opts.Latitude = req.Latitude
 			opts.Longitude = req.Longitude
-			if _, err := db.Exec(
-				`INSERT INTO geolocations (latitude, longitude, alert_id) VALUES (?, ?, ?)`,
-				*req.Latitude, *req.Longitude, alertID,
-			); err != nil {
-				log.Printf("Erreur SQL INSERT geolocation: %v", err)
-				// Non-blocking: alert + Telegram still proceed without pin.
-				opts.Latitude = nil
-				opts.Longitude = nil
-			}
+		}
+
+		// Alert and geolocation are inserted in the same transaction
+		alertID, err := insertAlertWithGeolocation(db, userID, configID, opts)
+		if err != nil {
+			log.Printf("Erreur SQL INSERT alerte: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de créer l'alerte"})
 		}
 
 		userName := loadUserDisplayName(db, userID)
@@ -127,6 +124,42 @@ func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
 			"notifications": notifications,
 		})
 	}
+}
+
+// insertAlertWithGeolocation creates the alert (default status PENDING) and,
+// when coordinates are provided, its geolocation row
+func insertAlertWithGeolocation(db *sql.DB, userID, configID int, opts alertNotifyOpts) (int64, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(
+		`INSERT INTO alerts (user_id, config_id) VALUES (?, ?)`,
+		userID, configID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	alertID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	if validCoords(opts.Latitude, opts.Longitude) {
+		if _, err := tx.Exec(
+			`INSERT INTO geolocations (latitude, longitude, alert_id) VALUES (?, ?, ?)`,
+			*opts.Latitude, *opts.Longitude, alertID,
+		); err != nil {
+			return 0, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return alertID, nil
 }
 
 func validCoords(lat, lng *float64) bool {
@@ -149,10 +182,12 @@ func triggerLabel(trigger string) string {
 	}
 }
 
+// buildAlertTelegramMessage builds the HTML (parse_mode) alert text.
+// userName is user-controlled and must be escaped.
 func buildAlertTelegramMessage(userName string, opts alertNotifyOpts) string {
 	var b strings.Builder
 	b.WriteString("🚨 <b>URGENCE — SAFE</b>\n\n")
-	b.WriteString(fmt.Sprintf("%s a besoin d'aide maintenant.\n", userName))
+	b.WriteString(fmt.Sprintf("%s a besoin d'aide maintenant.\n", html.EscapeString(userName)))
 	b.WriteString(fmt.Sprintf("📅 %s\n", time.Now().In(parisLocation).Format("02/01/2006 · 15:04")))
 	b.WriteString(fmt.Sprintf("⚡ Déclenchement : %s\n", triggerLabel(opts.Trigger)))
 	if validCoords(opts.Latitude, opts.Longitude) {
@@ -271,6 +306,7 @@ func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userNam
 	return results
 }
 
+// GET /api/v1/alerts — Lists the alerts of the authenticated user
 func listAlerts(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := getCurrentUserID(c)
@@ -310,6 +346,7 @@ func listAlerts(db *sql.DB) fiber.Handler {
 	}
 }
 
+// GET /api/v1/alerts/:id — Returns an alert by its ID (owner only)
 func getAlert(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id, err := strconv.Atoi(c.Params("id"))
@@ -347,6 +384,7 @@ func getAlert(db *sql.DB) fiber.Handler {
 	}
 }
 
+// PUT /api/v1/alerts/:id — Updates an alert status (owner only)
 func updateAlert(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id, err := strconv.Atoi(c.Params("id"))
@@ -369,6 +407,9 @@ func updateAlert(db *sql.DB) fiber.Handler {
 			return c.Status(code).JSON(fiber.Map{"error": msg})
 		}
 
+		// No RowsAffected check here: MySQL reports 0 when the status is left
+		// unchanged, which must NOT be mistaken for a 404. Existence is already
+		// guaranteed by the ownership check above.
 		if _, err := db.Exec(`UPDATE alerts SET status = ? WHERE alert_id = ?`, req.Status, id); err != nil {
 			log.Printf("Erreur SQL UPDATE alerte: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de mettre à jour l'alerte"})
@@ -378,6 +419,7 @@ func updateAlert(db *sql.DB) fiber.Handler {
 	}
 }
 
+// DELETE /api/v1/alerts/:id — Deletes an alert (owner only)
 func deleteAlert(db *sql.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id, err := strconv.Atoi(c.Params("id"))
@@ -400,6 +442,8 @@ func deleteAlert(db *sql.DB) fiber.Handler {
 	}
 }
 
+// checkAlertOwnership verifies that the alert exists and belongs to userID.
+// It returns (0, "") on success, otherwise the HTTP status and the JSON error message.
 func checkAlertOwnership(db *sql.DB, alertID, userID int) (int, string) {
 	var ownerID int
 	err := db.QueryRow(`SELECT user_id FROM alerts WHERE alert_id = ?`, alertID).Scan(&ownerID)

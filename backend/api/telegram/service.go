@@ -7,19 +7,27 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
+// MaxAudioBytes caps a downloaded clip (kept in memory before upload to Telegram).
+const MaxAudioBytes = 25 << 20
+
 // Service wraps Telegram Bot API calls.
 type Service struct {
-	token      string
-	botUser    string
-	httpClient *http.Client
+	token        string
+	botUser      string
+	httpClient   *http.Client
+	audioClient  *http.Client
+	audioSources []*url.URL
 }
 
 // NewService builds a Telegram service from env vars.
@@ -34,11 +42,70 @@ func NewService() *Service {
 	if botUser == "" {
 		botUser = "SafeAlertBot"
 	}
+	sources := parseAudioSources(os.Getenv("TELEGRAM_AUDIO_ALLOWED_URLS"))
+	if len(sources) == 0 {
+		log.Println("Telegram: TELEGRAM_AUDIO_ALLOWED_URLS vide — envoi des clips audio désactivé")
+	}
 	return &Service{
 		token:   token,
 		botUser: botUser,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
+		},
+		audioClient:  newAudioClient(),
+		audioSources: sources,
+	}
+}
+
+// parseAudioSources parses a comma-separated list of allowed URL prefixes,
+// e.g. "http://minio-service:9000/audio-bucket/".
+func parseAudioSources(raw string) []*url.URL {
+	var sources []*url.URL
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		u, err := url.Parse(item)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			log.Printf("Telegram: source audio ignorée %q", item)
+			continue
+		}
+		if !strings.HasSuffix(u.Path, "/") {
+			u.Path += "/"
+		}
+		sources = append(sources, u)
+	}
+	return sources
+}
+
+// newAudioClient returns a client dedicated to clip downloads: no redirects
+// (they would bypass the allow-list) and no loopback / link-local targets
+// (cloud metadata endpoint 169.254.169.254, local services).
+func newAudioClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+				ip.IsMulticast() || ip.IsUnspecified() {
+				return fmt.Errorf("adresse audio refusée: %s", host)
+			}
+			return nil
+		},
+	}
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 }
@@ -194,32 +261,87 @@ func (s *Service) RemoveKeyboard(chatID int64, text string) error {
 	return nil
 }
 
-// SendAudio downloads audio from audioURL and sends it to a Telegram chat.
-// Uses sendAudio (m4a/mp3) so contacts can play it inline.
-func (s *Service) SendAudio(chatID int64, audioURL, caption string) error {
+// AudioFile is an alert clip downloaded once, then sent to every contact.
+type AudioFile struct {
+	Filename string
+	Data     []byte
+}
+
+// FetchAudio downloads a clip from an allow-listed source (TELEGRAM_AUDIO_ALLOWED_URLS).
+// blob_url comes from the client: any other URL is refused to prevent SSRF.
+func (s *Service) FetchAudio(audioURL string) (*AudioFile, error) {
 	if s == nil || s.token == "" {
-		return fmt.Errorf("telegram non configuré")
+		return nil, fmt.Errorf("telegram non configuré")
 	}
-	if audioURL == "" {
-		return fmt.Errorf("url audio vide")
-	}
-
-	dlResp, err := s.httpClient.Get(audioURL)
+	u, err := s.checkAudioURL(audioURL)
 	if err != nil {
-		return fmt.Errorf("téléchargement audio: %w", err)
-	}
-	defer dlResp.Body.Close()
-	if dlResp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(dlResp.Body, 512))
-		return fmt.Errorf("téléchargement audio %d: %s", dlResp.StatusCode, string(body))
+		return nil, err
 	}
 
-	filename := path.Base(audioURL)
+	resp, err := s.audioClient.Get(u.String())
+	if err != nil {
+		return nil, fmt.Errorf("téléchargement audio: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("téléchargement audio: statut %d", resp.StatusCode)
+	}
+	if resp.ContentLength > MaxAudioBytes {
+		return nil, fmt.Errorf("audio trop volumineux (%d octets)", resp.ContentLength)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxAudioBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("lecture audio: %w", err)
+	}
+	if len(data) > MaxAudioBytes {
+		return nil, fmt.Errorf("audio trop volumineux (> %d octets)", MaxAudioBytes)
+	}
+
+	filename := path.Base(u.Path)
 	if filename == "" || filename == "." || filename == "/" {
 		filename = "alerte.m4a"
 	}
 	if !strings.Contains(filename, ".") {
 		filename += ".m4a"
+	}
+	return &AudioFile{Filename: filename, Data: data}, nil
+}
+
+// checkAudioURL accepts only http(s) URLs under one of the configured prefixes
+// (same scheme, same host:port, path inside the prefix).
+func (s *Service) checkAudioURL(raw string) (*url.URL, error) {
+	if len(s.audioSources) == 0 {
+		return nil, fmt.Errorf("aucune source audio autorisée (TELEGRAM_AUDIO_ALLOWED_URLS)")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("url audio invalide: %w", err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Host == "" {
+		return nil, fmt.Errorf("url audio refusée")
+	}
+	if strings.Contains(u.Path, "..") || strings.Contains(u.RawPath, "..") {
+		return nil, fmt.Errorf("url audio refusée")
+	}
+	for _, src := range s.audioSources {
+		if u.Scheme == src.Scheme &&
+			strings.EqualFold(u.Host, src.Host) &&
+			strings.HasPrefix(u.Path, src.Path) {
+			return u, nil
+		}
+	}
+	return nil, fmt.Errorf("url audio hors des sources autorisées")
+}
+
+// SendAudioFile sends a downloaded clip to a Telegram chat.
+// Uses sendAudio (m4a/mp3) so contacts can play it inline.
+func (s *Service) SendAudioFile(chatID int64, file *AudioFile, caption string) error {
+	if s == nil || s.token == "" {
+		return fmt.Errorf("telegram non configuré")
+	}
+	if file == nil || len(file.Data) == 0 {
+		return fmt.Errorf("audio vide")
 	}
 
 	var buf bytes.Buffer
@@ -235,11 +357,11 @@ func (s *Service) SendAudio(chatID int64, audioURL, caption string) error {
 			return err
 		}
 	}
-	part, err := w.CreateFormFile("audio", filename)
+	part, err := w.CreateFormFile("audio", file.Filename)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(part, dlResp.Body); err != nil {
+	if _, err := part.Write(file.Data); err != nil {
 		return fmt.Errorf("copie audio: %w", err)
 	}
 	if err := w.Close(); err != nil {
