@@ -320,11 +320,21 @@ class ApiService {
   Future<CreateAlertResponse> createAlert({
     required String token,
     int? configId,
+    double? latitude,
+    double? longitude,
+    String? trigger,
   }) async {
     try {
       final body = <String, dynamic>{};
       if (configId != null && configId > 0) {
         body['config_id'] = configId;
+      }
+      if (latitude != null && longitude != null) {
+        body['latitude'] = latitude;
+        body['longitude'] = longitude;
+      }
+      if (trigger != null && trigger.isNotEmpty) {
+        body['trigger'] = trigger;
       }
 
       final response = await _client.post(
