@@ -10,7 +10,7 @@
 ### Backend local (Telegram)
 
 1. Copier `backend/api/.env.example` → `backend/api/.env` et renseigner `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME`
-2. Lancer MariaDB + `cd backend/api && go run .`
-3. Exposer le port (ngrok) et enregistrer le webhook — voir [Documentation/api/telegram.md](Documentation/api/telegram.md)
+2. Lancer MariaDB + `cd backend/api && set -a && source .env && set +a && go run .`
+3. Exposer le port (ngrok) et enregistrer le webhook — voir [Documentation/api/endpoints/telegram.md](Documentation/api/endpoints/telegram.md)
 4. App Flutter pointant vers l’API locale :
    `flutter run --dart-define=API_HOST=<IP> --dart-define=API_PORT=8080`

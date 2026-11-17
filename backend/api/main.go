@@ -4,52 +4,49 @@ import (
 	"database/sql"
 	"fmt"
 	"gpe/routes"
+	_ "gpe/routes"
 	"gpe/telegram"
 	"log"
 	"os"
 	"time"
 
-	"github.com/ansrivas/fiberprometheus/v2"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/ansrivas/fiberprometheus/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/mysql"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Load backend/api/.env when present (ignored if missing).
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found — using system environment variables")
-	}
-
 	// for local usage : kubectl port-forward svc/my-mariadb -n gpe 3306:3306
 	dbUser := getEnv("DB_USER", "gpe-user")
-	dbPass := getEnv("DB_PASSWORD", "CHANGE_ME")
+	dbPass := getEnv("DB_PASSWORD", "azerty1234")
 	dbHost := getEnv("DB_HOST", "127.0.0.1")
 	dbPort := getEnv("DB_PORT", "3306")
 	dbName := getEnv("DB_NAME", "gpe-db")
 
+	// Format: username:password@tcp(host:port)/dbname?parseTime=true
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&multiStatements=true", dbUser, dbPass, dbHost, dbPort, dbName)
 
-	log.Printf("Attempting database connection to %s on %s:%s...", dbName, dbHost, dbPort)
+	log.Printf("Tentative de connexion à la base de données %s sur %s:%s...", dbName, dbHost, dbPort)
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		log.Fatalf("Database configuration error: %v", err)
+		log.Fatalf("Erreur de configuration de la base de données: %v", err)
 	}
 	defer db.Close()
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetMaxOpenConns(25)                 // nombre de connexions simultanées
+	db.SetMaxIdleConns(5)                  // Nombre de connexions gardées au repos
+	db.SetConnMaxLifetime(5 * time.Minute) // Durée de vie max d'une connexion
 
+	// try connection to db
 	err = db.Ping()
 	if err != nil {
-		log.Fatalf("Cannot reach database: %v", err)
+		log.Fatalf("Impossible de joindre la base de données: %v", err)
 	}
 
 	log.Println("Db up")
@@ -63,7 +60,10 @@ func main() {
 		AppName: "Safe API v1.0",
 	})
 
+	// Activate logger
 	app.Use(logger.New())
+
+	// Ensure api to not crash in case of panic
 	app.Use(recover.New())
 
 	prometheus := fiberprometheus.New("gpe-backend")
@@ -75,34 +75,39 @@ func main() {
 
 	api := app.Group("/api/v1")
 
+	// Service Telegram (nil si TELEGRAM_BOT_TOKEN absent → notifications désactivées)
 	tg := telegram.NewService()
 
-	// Telegram webhook first: no X-API-Key / JWT (Telegram cannot send them).
+	// Webhook Telegram — enregistré sans X-API-Key / JWT (Telegram ne peut pas les envoyer),
+	// protégé par TELEGRAM_WEBHOOK_SECRET
 	routes.RegisterTelegramRoutes(api, db, tg)
 
+	// API Key middleware — protège toutes les routes /api/v1
 	appKey := getEnv("API_KEY_APP", "")
 	devKey := getEnv("API_KEY_DEV", "")
 	var keyMiddleware fiber.Handler
 	if appKey != "" && devKey != "" {
 		keyMiddleware = routes.ApiKeyMiddleware(appKey, devKey)
-		log.Println("API Key auth enabled")
+		log.Println("API Key auth activée")
 	} else {
 		keyMiddleware = func(c *fiber.Ctx) error { return c.Next() }
-		log.Println("API Key auth DISABLED (keys missing)")
+		log.Println("API Key auth DÉSACTIVÉE (clés manquantes)")
 	}
 
 	routes.RegisterUserRoutes(api, db, keyMiddleware)
-	routes.RegisterConfigurationRoutes(api, db, keyMiddleware)
-	routes.RegisterContactRoutes(api, db, keyMiddleware, tg)
-	routes.RegisterAlertRoutes(api, db, keyMiddleware, tg)
 	routes.RegisterAudioRoutes(api, db, keyMiddleware, tg)
+	routes.RegisterConfigurationRoutes(api, db, keyMiddleware)
+	routes.RegisterAlertRoutes(api, db, keyMiddleware, tg)
+	routes.RegisterContactRoutes(api, db, keyMiddleware, tg)
+
 
 	log.Println("Server starting on :8080...")
 	if err := app.Listen(":8080"); err != nil {
-		log.Fatalf("Error when launching server: %v", err)
+		log.Fatalf("Error when lauching server: %v", err)
 	}
 }
 
+// URead ENV var with fallback value
 func getEnv(key, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
