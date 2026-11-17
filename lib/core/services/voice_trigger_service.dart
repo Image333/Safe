@@ -10,6 +10,7 @@ import '../storage/voice_trigger_storage.dart';
 import 'api_service.dart';
 import 'audio_history_service.dart';
 import 'audio_sync_service.dart';
+import 'location_service.dart';
 import 'speech_recognition_service.dart';
 import 'background_keep_alive_service.dart';
 
@@ -72,6 +73,7 @@ class VoiceTriggerService {
   final AudioHistoryService _audioHistoryService;
   final ApiService _apiService;
   final AuthStorage _authStorage;
+  final LocationService _locationService;
 
   StreamSubscription<dynamic>? _eventSubscription;
 
@@ -87,11 +89,13 @@ class VoiceTriggerService {
     AudioHistoryService? audioHistoryService,
     ApiService? apiService,
     AuthStorage? authStorage,
+    LocationService? locationService,
   })  : _storage = storage ?? VoiceTriggerStorage(),
         _audioSyncService = audioSyncService ?? AudioSyncService(),
         _audioHistoryService = audioHistoryService ?? AudioHistoryService(),
         _apiService = apiService ?? ApiService(),
         _authStorage = authStorage ?? AuthStorage(),
+        _locationService = locationService ?? LocationService(),
         _speechService = SpeechRecognitionService() {
     _bindSpeechServiceCallbacks();
     _listenToNativeEvents();
@@ -186,7 +190,13 @@ class VoiceTriggerService {
         debugPrint('VoiceTrigger: pas de session — alerte Telegram ignorée');
         return null;
       }
-      final alert = await _apiService.createAlert(token: token);
+      final position = await _locationService.getCurrentPosition();
+      final alert = await _apiService.createAlert(
+        token: token,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        trigger: 'voice',
+      );
       debugPrint(
         '🚨 VoiceTrigger: alerte #${alert.alertId} créée'
         ' (${alert.sentCount} Telegram envoyé(s))',

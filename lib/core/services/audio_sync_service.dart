@@ -1,5 +1,6 @@
 import '../storage/auth_storage.dart';
 import 'api_service.dart';
+import 'location_service.dart';
 import 'minio_upload_service.dart';
 
 /// Résultat d'une tentative de sync remote d'un clip.
@@ -40,16 +41,19 @@ class AudioSyncService {
   final ApiService _apiService;
   final MinioUploadService _minioUploadService;
   final AuthStorage _authStorage;
+  final LocationService _locationService;
 
   AudioSyncService({
     AuthServiceAware? auth,
     ApiService? apiService,
     MinioUploadService? minioUploadService,
     AuthStorage? authStorage,
+    LocationService? locationService,
   })  : _auth = auth ?? const _DefaultAuthCheck(),
         _apiService = apiService ?? ApiService(),
         _minioUploadService = minioUploadService ?? MinioUploadService(),
-        _authStorage = authStorage ?? AuthStorage();
+        _authStorage = authStorage ?? AuthStorage(),
+        _locationService = locationService ?? LocationService();
 
   /// Si non authentifié → local only.
   /// Si authentifié → MinIO puis POST /alerts/:alertId/audio.
@@ -82,7 +86,13 @@ class AudioSyncService {
       var resolvedAlertId = (alertId != null && alertId > 0) ? alertId : 0;
       if (resolvedAlertId <= 0) {
         // Pas d'alerte fournie : on en crée une pour notifier Telegram + lier l'audio.
-        final alert = await _apiService.createAlert(token: token);
+        final position = await _locationService.getCurrentPosition();
+        final alert = await _apiService.createAlert(
+          token: token,
+          latitude: position?.latitude,
+          longitude: position?.longitude,
+          trigger: 'sos',
+        );
         resolvedAlertId = alert.alertId;
       }
       if (resolvedAlertId <= 0) {
