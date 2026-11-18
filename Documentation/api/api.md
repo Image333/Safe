@@ -68,7 +68,7 @@ X-API-Key: <your-api-key>
 Authorization: Bearer <your-jwt-token>
 ```
 
-> **Exception:** `POST /telegram/webhook` has no `X-API-Key` / JWT. It is protected by `TELEGRAM_WEBHOOK_SECRET` (`X-Telegram-Bot-Api-Secret-Token`). See [Telegram webhook](./telegram.md).
+> **Exception:** `POST /telegram/webhook` has no `X-API-Key` / JWT. It is protected by `TELEGRAM_WEBHOOK_SECRET` (`X-Telegram-Bot-Api-Secret-Token`). See [Telegram webhook](./endpoints/telegram.md).
 
 ---
 
@@ -98,6 +98,18 @@ Authorization: Bearer <your-jwt-token>
 | `DELETE /alerts/{id}`         | `/api/v1/alerts/{id}`           |
 | `POST /telegram/webhook`      | `/api/v1/telegram/webhook`      |
 
+### Example Request
+
+```http
+POST /api/v1/login
+Content-Type: application/json
+
+{
+  "email": "john.doe@example.com",
+  "password": "MySecurePassword123!"
+}
+```
+
 > **Note:** Unless otherwise specified, all endpoint paths shown throughout this documentation are relative to the `/api/v1` base path.
 
 # Documented endpoints
@@ -106,5 +118,5 @@ Authorization: Bearer <your-jwt-token>
 - [Audio](./endpoints/audio.md)
 - [Configurations](./endpoints/configurations.md)
 - [Alerts](./endpoints/alerts.md)
-- [Contacts](./contacts.md)
-- [Telegram webhook](./telegram.md)
+- [Contacts](./endpoints/contacts.md)
+- [Telegram webhook](./endpoints/telegram.md)

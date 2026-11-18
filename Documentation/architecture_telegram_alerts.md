@@ -50,12 +50,12 @@ Sur l’écran Contacts :
 ### Alerte runtime
 
 1. `_triggerAlert` / voice trigger → `POST /api/v1/alerts` (JWT) avec optionnellement `latitude`, `longitude`, `trigger` (`sos` | `volume` | `voice`).
-2. Si coords valides → INSERT `geolocations` (1:1 avec l’alerte, pas de route dédiée).
+2. INSERT de l’alerte (statut `PENDING`) et, si coords valides, de `geolocations` (1:1, pas de route dédiée) dans une même transaction.
 3. Le backend fan-out `sendMessage` (texte enrichi : urgence, heure Paris, type de déclenchement, lien Maps si GPS) puis `sendLocation` (pin natif) si coords présentes.
 4. Réponse : `notifications[]` avec `status` = `sent` | `not_linked` | `error`.
 5. L’UI affiche un feedback réel (plus de faux « contacts alertés »).
 6. Enregistrement local → upload MinIO → `POST /api/v1/alerts/:id/audio`.
-7. Le backend fan-out `SendAudio` (télécharge `blob_url`, multipart Bot API) aux mêmes contacts liés.
+7. Le backend lit les contacts liés, répond, puis un pool de workers borné télécharge `blob_url` une seule fois (`FetchAudio`) et l’envoie à chaque contact (`SendAudioFile`, 3 tentatives).
 
 ### Dépendance MinIO
 
@@ -63,20 +63,20 @@ Sur l’écran Contacts :
 |----------------|------|-------------|
 | API SAFE (`:30001` cluster / `:8080` local) | JWT, alertes, contacts | Texte Telegram |
 | MariaDB (interne cluster) | Users, contacts, `audio_records` | Persistance |
-| MinIO S3 (`:30900` NodePort) | Stockage objets audio | Upload + `SendAudio` |
+| MinIO S3 (`:30900` NodePort) | Stockage objets audio | Upload + `FetchAudio` |
 | MinIO Console (`:30901`) | UI admin | **Pas** utilisé par l’app |
 
 Si l’API S3 MinIO est down / timeout, le texte Telegram part quand même ; l’audio ne sera jamais attaché ni renvoyé (pas de `POST .../audio`, table `audio_records` vide).
 
-L’URL `blob_url` doit être joignable **depuis le serveur API** (c’est lui qui télécharge avant `sendAudio`, pas les serveurs Telegram directement).
+L’URL `blob_url` doit être joignable **depuis le serveur API** (c’est lui qui télécharge avant `sendAudio`, pas les serveurs Telegram directement) et commencer par un des préfixes de `TELEGRAM_AUDIO_ALLOWED_URLS` (protection SSRF : toute autre URL n’est jamais téléchargée).
 
 ## Composants
 
 | Couche | Fichiers / rôle |
 |--------|------------------|
-| Backend | `backend/api/telegram` (`SendMessage`, `SendLocation`, `SendAudio`), `routes/contacts.go`, `routes/telegram_webhook.go`, `routes/alert.go`, `routes/audio.go` |
+| Backend | `backend/api/telegram` (`SendMessage`, `SendLocation`, `FetchAudio`, `SendAudioFile`), `routes/contacts.go`, `routes/telegram_webhook.go`, `routes/alert.go`, `routes/audio.go`, `routes/audio_notifier.go` |
 | Flutter | `LocationService`, `TrustedContactsService`, `TelegramInviteSheet`, `_triggerAlert` / `AudioSyncService` / `MinioUploadService`, `VoiceTriggerService` |
-| Config | `TELEGRAM_*` via `.env` API ; MinIO via `ApiConfig` / `--dart-define=MINIO_*` |
+| Config | `TELEGRAM_*` en variables d’environnement de l’API ; MinIO via `ApiConfig` / `--dart-define=MINIO_*` |
 
 ## Webhook
 
@@ -100,8 +100,8 @@ L’URL `blob_url` doit être joignable **depuis le serveur API** (c’est lui q
 
 ## Voir aussi
 
-- [API Contacts](./api/contacts.md)
-- [API Alerts](./api/alerts.md)
-- [API Audio](./api/audio.md)
-- [API Telegram webhook](./api/telegram.md)
+- [API Contacts](./api/endpoints/contacts.md)
+- [API Alerts](./api/endpoints/alerts.md)
+- [API Audio](./api/endpoints/audio.md)
+- [API Telegram webhook](./api/endpoints/telegram.md)
 - [Choix techno](./ChoixTechno.md)

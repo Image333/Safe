@@ -1,6 +1,6 @@
 # Contacts documentation section
 
-> **Base path:** `/api/v1` — see [API Base Path](./api.md).
+> **Base path:** `/api/v1` — see [API Base Path](../api.md).
 
 Key points :
 

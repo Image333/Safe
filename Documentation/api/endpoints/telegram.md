@@ -1,6 +1,6 @@
 # Telegram webhook documentation
 
-> **Base path:** `/api/v1` — see [API Base Path](./api.md).
+> **Base path:** `/api/v1` — see [API Base Path](../api.md).
 
 Key points :
 
@@ -10,7 +10,7 @@ Key points :
 
 > **Important:** this endpoint has **no JWT** and **no X-API-Key**. It must stay registered **before** `ApiKeyMiddleware` / `ProtectedRoute` on `/api/v1`, otherwise Telegram receives `401 Unauthorized` and no contact is linked. Protection is the mandatory `TELEGRAM_WEBHOOK_SECRET`.
 
-Architecture : [architecture_telegram_alerts.md](../architecture_telegram_alerts.md).
+Architecture : [architecture_telegram_alerts.md](../../architecture_telegram_alerts.md).
 
 ---
 
@@ -77,5 +77,6 @@ Useful `getWebhookInfo` fields:
 | `TELEGRAM_BOT_TOKEN` | Yes (for sending) | @BotFather token |
 | `TELEGRAM_BOT_USERNAME` | Recommended | Username without `@` (deep-links) |
 | `TELEGRAM_WEBHOOK_SECRET` | **Yes** | Secret header Telegram sends on each update |
+| `TELEGRAM_AUDIO_ALLOWED_URLS` | Yes (for audio) | Comma-separated `blob_url` prefixes the API may download, e.g. `http://minio-service:9000/audio-bucket/`. Empty = clips not forwarded |
 
 See also `backend/api/.env.example`.
