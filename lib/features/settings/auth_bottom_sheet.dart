@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/api_service.dart';
+import '../../core/services/trusted_contacts_service.dart';
 
 enum AuthMode { login, register }
 
@@ -104,6 +105,9 @@ class _AuthBottomSheetState extends State<AuthBottomSheet>
           name: _nameController.text.trim(),
         );
       }
+
+      // Conserve les contacts ajoutés pendant l'onboarding (push API).
+      await TrustedContactsService().syncAfterAuth();
 
       if (!mounted) return;
       setState(() => _loading = false);

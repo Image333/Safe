@@ -22,19 +22,45 @@ class TrustedContactsService {
       _storage.save(contacts);
 
   /// Charge depuis l'API si connecté, sinon le cache local.
+  ///
+  /// Après une inscription / connexion, les contacts ajoutés pendant
+  /// l'onboarding (sans `contact_id`) sont poussés vers l'API avant
+  /// d'écraser le cache local avec la liste distante.
   Future<List<TrustedContact>> load() async {
+    final local = await _storage.load();
     final token = await _auth.getToken();
     if (token == null || token.isEmpty) {
-      return _storage.load();
+      return local;
     }
     try {
+      await _pushLocalOnly(token, local);
       final remote = await _api.listContacts(token: token);
       await _storage.save(remote);
       return remote;
     } catch (_) {
-      return _storage.load();
+      return local;
     }
   }
+
+  /// Pousse vers l'API les contacts encore uniquement locaux.
+  Future<void> _pushLocalOnly(String token, List<TrustedContact> local) async {
+    for (final contact in local) {
+      if (contact.contactId != null && contact.contactId! > 0) continue;
+      try {
+        await _api.createContact(
+          token: token,
+          contactName: contact.name,
+          phoneNumber: contact.phone,
+          email: contact.email,
+        );
+      } catch (_) {
+        // On continue : listContacts reconciliera ce qui a déjà été créé.
+      }
+    }
+  }
+
+  /// Force la synchro des contacts d'onboarding juste après login / register.
+  Future<List<TrustedContact>> syncAfterAuth() => load();
 
   /// Crée un contact : API si auth, sinon local uniquement.
   Future<TrustedContact> add({
