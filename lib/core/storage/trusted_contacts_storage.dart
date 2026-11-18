@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Contact de confiance (local + champs sync API Telegram).
@@ -85,12 +86,18 @@ class TrustedContact {
   }
 }
 
+/// Stockage chiffré (Keychain / Keystore) des contacts de confiance :
+/// noms et numéros sont des données personnelles.
 class TrustedContactsStorage {
   static const _key = 'trusted_contacts_v2';
 
+  final FlutterSecureStorage _storage;
+
+  TrustedContactsStorage({FlutterSecureStorage? storage})
+      : _storage = storage ?? const FlutterSecureStorage();
+
   Future<List<TrustedContact>> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
+    final raw = await _storage.read(key: _key) ?? await _migrateFromPrefs();
     if (raw == null || raw.isEmpty) return [];
 
     try {
@@ -106,9 +113,8 @@ class TrustedContactsStorage {
   }
 
   Future<void> save(List<TrustedContact> contacts) async {
-    final prefs = await SharedPreferences.getInstance();
     final encoded = jsonEncode(contacts.map((c) => c.toJson()).toList());
-    await prefs.setString(_key, encoded);
+    await _storage.write(key: _key, value: encoded);
   }
 
   Future<int> count() async {
@@ -117,7 +123,20 @@ class TrustedContactsStorage {
   }
 
   Future<void> clear() async {
+    await _storage.delete(key: _key);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_key);
+  }
+
+  /// Déplace les contacts enregistrés en clair par les versions précédentes
+  /// (SharedPreferences) vers le stockage sécurisé.
+  Future<String?> _migrateFromPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final legacy = prefs.getString(_key);
+    if (legacy == null || legacy.isEmpty) return null;
+
+    await _storage.write(key: _key, value: legacy);
+    await prefs.remove(_key);
+    return legacy;
   }
 }
