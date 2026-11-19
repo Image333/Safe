@@ -3,6 +3,7 @@ package telegram
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,10 +22,14 @@ import (
 // MaxAudioBytes caps a downloaded clip (kept in memory before upload to Telegram).
 const MaxAudioBytes = 25 << 20
 
+// defaultAPIBase is the Bot API root; overridable in tests via Service.apiBase.
+const defaultAPIBase = "https://api.telegram.org"
+
 // Service wraps Telegram Bot API calls.
 type Service struct {
 	token        string
 	botUser      string
+	apiBase      string
 	httpClient   *http.Client
 	audioClient  *http.Client
 	audioSources []*url.URL
@@ -49,12 +54,33 @@ func NewService() *Service {
 	return &Service{
 		token:   token,
 		botUser: botUser,
+		apiBase: defaultAPIBase,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
 		audioClient:  newAudioClient(),
 		audioSources: sources,
 	}
+}
+
+// apiURL builds the Bot API endpoint for one method.
+func (s *Service) apiURL(method string) string {
+	base := s.apiBase
+	if base == "" {
+		base = defaultAPIBase
+	}
+	return fmt.Sprintf("%s/bot%s/%s", base, s.token, method)
+}
+
+// scrubError removes the request URL from transport errors. Go wraps failures in
+// *url.Error, whose message embeds the full URL including the bot token, so
+// neither API responses nor logs may surface the raw error.
+func scrubError(op string, err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return fmt.Errorf("%s: %v", op, urlErr.Err)
+	}
+	return fmt.Errorf("%s: %v", op, err)
 }
 
 // parseAudioSources parses a comma-separated list of allowed URL prefixes,
@@ -145,14 +171,13 @@ func (s *Service) SendMessage(chatID int64, text string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.token)
-	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := s.httpClient.Post(s.apiURL("sendMessage"), "application/json", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return scrubError("telegram sendMessage", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram sendMessage %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -175,14 +200,13 @@ func (s *Service) SendLocation(chatID int64, latitude, longitude float64) error 
 		return err
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendLocation", s.token)
-	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := s.httpClient.Post(s.apiURL("sendLocation"), "application/json", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return scrubError("telegram sendLocation", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram sendLocation %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -216,14 +240,13 @@ func (s *Service) SendContactRequestKeyboard(chatID int64, text string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.token)
-	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := s.httpClient.Post(s.apiURL("sendMessage"), "application/json", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return scrubError("telegram sendMessage", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram sendMessage %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -248,13 +271,12 @@ func (s *Service) RemoveKeyboard(chatID int64, text string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.token)
-	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := s.httpClient.Post(s.apiURL("sendMessage"), "application/json", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return scrubError("telegram sendMessage", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram sendMessage %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -280,7 +302,7 @@ func (s *Service) FetchAudio(audioURL string) (*AudioFile, error) {
 
 	resp, err := s.audioClient.Get(u.String())
 	if err != nil {
-		return nil, fmt.Errorf("téléchargement audio: %w", err)
+		return nil, scrubError("téléchargement audio", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -368,8 +390,7 @@ func (s *Service) SendAudioFile(chatID int64, file *AudioFile, caption string) e
 		return err
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendAudio", s.token)
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequest(http.MethodPost, s.apiURL("sendAudio"), &buf)
 	if err != nil {
 		return err
 	}
@@ -377,11 +398,11 @@ func (s *Service) SendAudioFile(chatID int64, file *AudioFile, caption string) e
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return err
+		return scrubError("telegram sendAudio", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram sendAudio %d: %s", resp.StatusCode, string(respBody))
 	}
