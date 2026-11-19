@@ -2,9 +2,11 @@ package routes
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +25,7 @@ func setupAlertTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 	}
 
 	noopMiddleware := func(c *fiber.Ctx) error { return c.Next() }
-	RegisterAlertRoutes(app, db, noopMiddleware)
+	RegisterAlertRoutes(app, db, noopMiddleware, nil)
 
 	t.Cleanup(func() {
 		db.Close()
@@ -36,20 +38,37 @@ func setupAlertTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 // POST /alerts
 // ============================================================================
 
+// expectAlertNotifyQueries mocks the display name lookup and the trusted
+// contacts query run after the alert is created (no linked contact here).
+func expectAlertNotifyQueries(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`SELECT firstname, name FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"firstname", "name"}).AddRow("Jean", "Dupont"))
+
+	mock.ExpectQuery(`SELECT c.contact_id, c.contact_name, c.telegram_chat_id`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"contact_id", "contact_name", "telegram_chat_id"}))
+}
+
 // TestCreateAlert_Success: a valid config_id inserts an alert owned by the JWT
 // user and returns 201 with the generated alert_id.
 func TestCreateAlert_Success(t *testing.T) {
 	app, mock := setupAlertTestEnv(t)
 
-	// The referenced configuration must exist
-	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
-		WithArgs(2).
+	// The user's own configuration is loaded first
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
 		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
 
-	// user_id comes from the JWT (1), config_id from the body (2)
-	mock.ExpectExec(`INSERT INTO alerts`).
+	// user_id comes from the JWT (1), config_id from the body (2).
+	// The status column is not set: the alert gets the documented default PENDING.
+	mock.ExpectBegin()
+	mock.ExpectExec(`^INSERT INTO alerts \(user_id, config_id\) VALUES \(\?, \?\)$`).
 		WithArgs(1, 2).
 		WillReturnResult(sqlmock.NewResult(7, 1))
+	mock.ExpectCommit()
+
+	expectAlertNotifyQueries(mock)
 
 	body := CreateAlertRequest{ConfigID: 2}
 	jsonBody, _ := json.Marshal(body)
@@ -71,10 +90,22 @@ func TestCreateAlert_Success(t *testing.T) {
 	}
 }
 
-// TestCreateAlert_MissingConfigID: a missing or zero config_id is rejected with
-// 400 before any SQL query is issued.
+// TestCreateAlert_MissingConfigID: a missing or zero config_id falls back to
+// the configuration of the user.
 func TestCreateAlert_MissingConfigID(t *testing.T) {
-	app, _ := setupAlertTestEnv(t)
+	app, mock := setupAlertTestEnv(t)
+
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(5))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 5).
+		WillReturnResult(sqlmock.NewResult(8, 1))
+	mock.ExpectCommit()
+
+	expectAlertNotifyQueries(mock)
 
 	body := CreateAlertRequest{ConfigID: 0}
 	jsonBody, _ := json.Marshal(body)
@@ -84,19 +115,30 @@ func TestCreateAlert_MissingConfigID(t *testing.T) {
 
 	resp, _ := app.Test(req, -1)
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusBadRequest, resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
 	}
 }
 
-// TestCreateAlert_ConfigNotFound: referencing an unknown configuration returns
-// 404 instead of failing on the foreign key constraint.
+// TestCreateAlert_ConfigNotFound: an unknown config_id falls back to the
+// configuration of the user instead of failing on the foreign key constraint.
 func TestCreateAlert_ConfigNotFound(t *testing.T) {
 	app, mock := setupAlertTestEnv(t)
 
-	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
-		WithArgs(99).
-		WillReturnRows(sqlmock.NewRows([]string{})) // empty row set -> sql.ErrNoRows
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(5))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 5).
+		WillReturnResult(sqlmock.NewResult(9, 1))
+	mock.ExpectCommit()
+
+	expectAlertNotifyQueries(mock)
 
 	body := CreateAlertRequest{ConfigID: 99}
 	jsonBody, _ := json.Marshal(body)
@@ -106,8 +148,139 @@ func TestCreateAlert_ConfigNotFound(t *testing.T) {
 
 	resp, _ := app.Test(req, -1)
 
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusNotFound, resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
+	}
+}
+
+// TestCreateAlert_WithGeolocation: lat/lng are stored in geolocations in the
+// same transaction as the alert.
+func TestCreateAlert_WithGeolocation(t *testing.T) {
+	app, mock := setupAlertTestEnv(t)
+
+	lat, lng := 48.8566, 2.3522
+
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(10, 1))
+	mock.ExpectExec(`INSERT INTO geolocations`).
+		WithArgs(lat, lng, int64(10)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	expectAlertNotifyQueries(mock)
+
+	body := CreateAlertRequest{
+		ConfigID:  2,
+		Latitude:  &lat,
+		Longitude: &lng,
+		Trigger:   "sos",
+	}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/alerts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+generateTestJWT(t, 1, "jean@etna.fr"))
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("Erreur requête: %s", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
+	}
+}
+
+// TestCreateAlert_GeolocationFailure: if the geolocation insert fails, the
+// transaction is rolled back and no alert is created.
+func TestCreateAlert_GeolocationFailure(t *testing.T) {
+	app, mock := setupAlertTestEnv(t)
+
+	lat, lng := 48.8566, 2.3522
+
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(12, 1))
+	mock.ExpectExec(`INSERT INTO geolocations`).
+		WithArgs(lat, lng, int64(12)).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	body := CreateAlertRequest{ConfigID: 2, Latitude: &lat, Longitude: &lng}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/alerts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+generateTestJWT(t, 1, "jean@etna.fr"))
+
+	resp, _ := app.Test(req, -1)
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusInternalServerError, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
+	}
+}
+
+// TestCreateAlert_WithoutGeolocation: missing coords skip the geolocations insert.
+func TestCreateAlert_WithoutGeolocation(t *testing.T) {
+	app, mock := setupAlertTestEnv(t)
+
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO alerts`).
+		WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(11, 1))
+	mock.ExpectCommit()
+
+	expectAlertNotifyQueries(mock)
+
+	body := CreateAlertRequest{ConfigID: 2, Trigger: "volume"}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/alerts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+generateTestJWT(t, 1, "jean@etna.fr"))
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("Erreur requête: %s", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("Statut attendu: %d, obtenu: %d", http.StatusCreated, resp.StatusCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Attentes SQL non respectées: %s", err)
+	}
+}
+
+// TestBuildAlertTelegramMessage_EscapesUserName: the message is sent with
+// parse_mode HTML, so a user name containing markup must be escaped.
+func TestBuildAlertTelegramMessage_EscapesUserName(t *testing.T) {
+	msg := buildAlertTelegramMessage(`<a href="https://evil.example">Jean</a>`, alertNotifyOpts{})
+
+	if strings.Contains(msg, "<a href") {
+		t.Errorf("Le nom doit être échappé, message: %s", msg)
+	}
+	if !strings.Contains(msg, "&lt;a href=") {
+		t.Errorf("Nom échappé attendu dans le message: %s", msg)
 	}
 }
 

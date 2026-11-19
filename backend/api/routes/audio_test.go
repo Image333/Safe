@@ -21,7 +21,7 @@ func setupAudioTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 	}
 
 	noopMiddleware := func(c *fiber.Ctx) error { return c.Next() }
-	RegisterAudioRoutes(app, db, noopMiddleware)
+	RegisterAudioRoutes(app, db, noopMiddleware, nil)
 
 	t.Cleanup(func() {
 		db.Close()

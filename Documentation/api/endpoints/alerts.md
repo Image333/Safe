@@ -25,7 +25,9 @@ Key points :
 POST /alerts
 ```
 
-Creates an alert owned by the authenticated user. The alert is linked to an existing configuration referenced by `config_id`. The new alert is created with the default status `PENDING`.
+Creates an alert owned by the authenticated user. The alert is linked to the configuration referenced by `config_id` (or to the user's configuration). The new alert is created with the default status `PENDING`.
+
+The alert and its optional geolocation are inserted in a single transaction. The trusted contacts linked to Telegram are then notified (`sendMessage`, plus `sendLocation` when GPS coordinates are provided). The audio clip follows through [POST /alerts/{id}/audio](./audio.md). See [Telegram alerts architecture](../../architecture_telegram_alerts.md).
 
 ---
 
@@ -47,17 +49,23 @@ Authorization: Bearer <token>
 
 ### Parameters
 
-| Field     | Type    | Required | Description                                             |
-| --------- | ------- | -------- | ------------------------------------------------------- |
-| config_id | integer | Yes      | ID of an existing configuration to attach to the alert  |
+| Field     | Type    | Required | Description                                                              |
+| --------- | ------- | -------- | ------------------------------------------------------------------------ |
+| config_id | integer | No       | ID of an existing configuration; falls back to user config if omitted    |
+| latitude  | number  | No       | GPS latitude (−90…90); with longitude, stored in `geolocations` + pin TG |
+| longitude | number  | No       | GPS longitude (−180…180)                                                 |
+| trigger   | string  | No       | Alert source: `sos` \| `volume` \| `voice`                               |
 
-> **Note:** `user_id` is **not** part of the body — it is taken from the JWT.
+> **Note:** `user_id` is **not** part of the body — it is taken from the JWT. There is **no** separate `/geolocations` endpoint.
 
 ### Example
 
 ```json
 {
-  "config_id": 2
+  "config_id": 2,
+  "latitude": 48.8566,
+  "longitude": 2.3522,
+  "trigger": "sos"
 }
 ```
 
@@ -76,16 +84,41 @@ Authorization: Bearer <token>
 ```json
 {
   "message": "Alerte créée avec succès",
-  "alert_id": 7
+  "alert_id": 7,
+  "notifications": [
+    {
+      "contact_id": 5,
+      "contact_name": "Alice",
+      "status": "queued",
+      "channel": "telegram"
+    },
+    {
+      "contact_id": 8,
+      "contact_name": "Bob",
+      "status": "not_linked"
+    }
+  ]
 }
 ```
 
 ### Response Fields
 
-| Field    | Type    | Description                     |
-| -------- | ------- | ------------------------------- |
-| message  | string  | Success message                 |
-| alert_id | integer | ID of the newly created alert   |
+| Field         | Type    | Description                                   |
+| ------------- | ------- | --------------------------------------------- |
+| message       | string  | Success message                               |
+| alert_id      | integer | ID of the newly created alert                 |
+| notifications | array   | Delivery status per trusted contact (Telegram sends are asynchronous) |
+
+### Notification status
+
+| status       | Meaning                                                       |
+| ------------ | ------------------------------------------------------------- |
+| `queued`     | Accepted for background delivery to Telegram                  |
+| `not_linked` | Contact has no `telegram_chat_id` yet (bot not started)       |
+| `error`      | Delivery could not be scheduled (bot not configured, queue saturated) |
+
+Delivery failures after scheduling are logged by the backend; they are not
+reported synchronously in this response.
 
 ---
 
@@ -109,34 +142,6 @@ Invalid JSON:
 }
 ```
 
-Missing or zero config_id:
-
-```json
-{
-  "error": "config_id requis"
-}
-```
-
----
-
-### Configuration Not Found
-
-Returned when `config_id` does not reference an existing configuration.
-
-#### HTTP Status Code
-
-```http
-404 Not Found
-```
-
-#### Response
-
-```json
-{
-  "error": "Configuration non trouvée"
-}
-```
-
 ---
 
 ### Internal Server Error
@@ -147,11 +152,21 @@ Returned when `config_id` does not reference an existing configuration.
 500 Internal Server Error
 ```
 
-#### Response
+#### Responses
+
+Alert or geolocation insert failed (nothing is stored):
 
 ```json
 {
   "error": "Impossible de créer l'alerte"
+}
+```
+
+Configuration could not be resolved:
+
+```json
+{
+  "error": "Impossible de résoudre la configuration"
 }
 ```
 
@@ -160,8 +175,9 @@ Returned when `config_id` does not reference an existing configuration.
 ## Notes
 
 * The alert is always attached to the user identified by the JWT.
-* `config_id` must reference an existing configuration — otherwise the request is rejected with **404**, rather than failing on the foreign key constraint.
+* If `config_id` is omitted or does not reference an existing configuration, the user's configuration is used (created with default values if the user has none), rather than failing on the foreign key constraint.
 * The alert status defaults to `PENDING` (see [Update Alert Status](#update-alert-status) for the list of statuses).
+* The user's name is HTML-escaped in the Telegram message.
 
 ---
 

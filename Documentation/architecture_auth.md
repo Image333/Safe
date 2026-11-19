@@ -272,3 +272,6 @@ flutter run
 - Synchronisation des données utilisateur (contacts, configuration)
 - Tests unitaires et d'intégration
 - Déconnexion automatique à l'expiration du token
+- Envoi email d’invitation Telegram (SMTP) — stub API déjà en place
+
+> **Fait (contacts / alertes) :** sync contacts de confiance + alerte Telegram texte + suivi audio après MinIO — voir [architecture_telegram_alerts.md](./architecture_telegram_alerts.md), [api/endpoints/contacts.md](./api/endpoints/contacts.md) et [api/endpoints/audio.md](./api/endpoints/audio.md).

@@ -1,0 +1,9 @@
+-- Charset upgrade is forward-only: there is no safe down migration.
+--
+-- Downgrading the columns to utf8mb3 would fail with "ERROR 1366" as soon as a
+-- single row contains a 4-byte character (emoji), and any non-strict server
+-- would silently replace those characters with "?" instead. utf8mb4 is a
+-- strict superset of utf8mb3, so keeping it is always safe.
+--
+-- This file is intentionally a no-op: it exists so that golang-migrate can
+-- record the version as reverted without destroying data.

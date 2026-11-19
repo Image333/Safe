@@ -5,9 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../storage/auth_storage.dart';
 import '../storage/voice_trigger_storage.dart';
+import 'api_service.dart';
 import 'audio_history_service.dart';
 import 'audio_sync_service.dart';
+import 'location_service.dart';
 import 'speech_recognition_service.dart';
 import 'background_keep_alive_service.dart';
 
@@ -68,6 +71,9 @@ class VoiceTriggerService {
   final SpeechRecognitionService _speechService;
   final AudioSyncService _audioSyncService;
   final AudioHistoryService _audioHistoryService;
+  final ApiService _apiService;
+  final AuthStorage _authStorage;
+  final LocationService _locationService;
 
   StreamSubscription<dynamic>? _eventSubscription;
 
@@ -81,9 +87,15 @@ class VoiceTriggerService {
     VoiceTriggerStorage? storage,
     AudioSyncService? audioSyncService,
     AudioHistoryService? audioHistoryService,
+    ApiService? apiService,
+    AuthStorage? authStorage,
+    LocationService? locationService,
   })  : _storage = storage ?? VoiceTriggerStorage(),
         _audioSyncService = audioSyncService ?? AudioSyncService(),
         _audioHistoryService = audioHistoryService ?? AudioHistoryService(),
+        _apiService = apiService ?? ApiService(),
+        _authStorage = authStorage ?? AuthStorage(),
+        _locationService = locationService ?? LocationService(),
         _speechService = SpeechRecognitionService() {
     _bindSpeechServiceCallbacks();
     _listenToNativeEvents();
@@ -140,18 +152,24 @@ class VoiceTriggerService {
     _speechService.onError = (error) => onError?.call(error);
   }
 
-  /// Upload MinIO + POST /alerts/:id/audio (ou conservation locale si hors-ligne).
+  /// Crée l'alerte (Telegram texte), puis upload MinIO + POST /alerts/:id/audio
+  /// (le backend joint alors l'audio aux contacts Telegram).
   Future<void> _syncRecordedClip(String filePath, int durationSec) async {
     // Rendre le clip visible dans l'historique local (le moteur natif iOS écrit
     // dans Documents/emergency_*.m4a, hors du dossier lu par l'historique).
     final localPath = await _audioHistoryService.importExternalClip(filePath);
     try {
+      final alertId = await _createAlertForVoiceTrigger();
       final result = await _audioSyncService.syncEmergencyClip(
         localFilePath: localPath,
         durationSec: durationSec > 0 ? durationSec : 1,
+        alertId: alertId,
       );
       if (result.uploaded) {
-        debugPrint('☁️ VoiceTrigger: clip synchronisé (audio_id=${result.audioId})');
+        debugPrint(
+          '☁️ VoiceTrigger: clip synchronisé'
+          ' (alert_id=$alertId, audio_id=${result.audioId})',
+        );
       } else {
         debugPrint('💾 VoiceTrigger: clip conservé en local'
             '${result.errorMessage != null ? " (${result.errorMessage})" : ""}');
@@ -161,6 +179,32 @@ class VoiceTriggerService {
       debugPrint('❌ VoiceTrigger: échec sync clip: $e');
       onError?.call('Échec de la synchronisation du clip: $e');
       onRecordingSynced?.call(localPath, AudioSyncResult.failed(e.toString()));
+    }
+  }
+
+  /// Notifie les contacts via POST /alerts ; retourne l'alert_id ou null hors-ligne.
+  Future<int?> _createAlertForVoiceTrigger() async {
+    try {
+      final token = await _authStorage.getToken();
+      if (token == null || token.isEmpty) {
+        debugPrint('VoiceTrigger: pas de session — alerte Telegram ignorée');
+        return null;
+      }
+      final position = await _locationService.getCurrentPosition();
+      final alert = await _apiService.createAlert(
+        token: token,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        trigger: 'voice',
+      );
+      debugPrint(
+        '🚨 VoiceTrigger: alerte #${alert.alertId} créée'
+        ' (${alert.sentCount} Telegram envoyé(s))',
+      );
+      return alert.alertId > 0 ? alert.alertId : null;
+    } catch (e) {
+      debugPrint('⚠️ VoiceTrigger: createAlert échoué: $e');
+      return null;
     }
   }
 

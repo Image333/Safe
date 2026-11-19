@@ -5,18 +5,22 @@ import (
 	"fmt"
 	"gpe/routes"
 	_ "gpe/routes"
+	"gpe/telegram"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/ansrivas/fiberprometheus/v2"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/mysql"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -65,14 +69,23 @@ func main() {
 	// Ensure api to not crash in case of panic
 	app.Use(recover.New())
 
-	prometheus := fiberprometheus.New("gpe-backend")
-	prometheus.RegisterAt(app, "/metrics")
-	prometheus.SetSkipPaths([]string{"/health"})
-	app.Use(prometheus.Middleware)
+	// Serve the default registry so the app's own go_/process_ collectors and the
+	// telegram_* counters are exposed next to the HTTP metrics.
+	prom := fiberprometheus.NewWithRegistry(prometheus.DefaultRegisterer, "gpe-backend", "http", "", nil)
+	prom.RegisterAt(app, "/metrics")
+	prom.SetSkipPaths([]string{"/health"})
+	app.Use(prom.Middleware)
 
 	routes.HealthRoutes(app)
 
 	api := app.Group("/api/v1")
+
+	// Service Telegram (nil si TELEGRAM_BOT_TOKEN absent → notifications désactivées)
+	tg := telegram.NewService()
+
+	// Webhook Telegram — enregistré sans X-API-Key / JWT (Telegram ne peut pas les envoyer),
+	// protégé par TELEGRAM_WEBHOOK_SECRET
+	routes.RegisterTelegramRoutes(api, db, tg)
 
 	// API Key middleware — protège toutes les routes /api/v1
 	appKey := getEnv("API_KEY_APP", "")
@@ -87,14 +100,32 @@ func main() {
 	}
 
 	routes.RegisterUserRoutes(api, db, keyMiddleware)
-	routes.RegisterAudioRoutes(api, db, keyMiddleware)
+	audioNotifier := routes.RegisterAudioRoutes(api, db, keyMiddleware, tg)
 	routes.RegisterConfigurationRoutes(api, db, keyMiddleware)
-	routes.RegisterAlertRoutes(api, db, keyMiddleware)
+	alertNotifier := routes.RegisterAlertRoutes(api, db, keyMiddleware, tg)
+	routes.RegisterContactRoutes(api, db, keyMiddleware, tg)
 
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-shutdown
+		log.Println("Arrêt demandé — fermeture des files d'envoi")
+		if err := app.Shutdown(); err != nil {
+			log.Printf("arrêt HTTP: %v", err)
+		}
+	}()
 
 	log.Println("Server starting on :8080...")
 	if err := app.Listen(":8080"); err != nil {
 		log.Fatalf("Error when lauching server: %v", err)
+	}
+
+	// Drain the Telegram queues so in-flight notifications are not lost.
+	if alertNotifier != nil {
+		alertNotifier.Close()
+	}
+	if audioNotifier != nil {
+		audioNotifier.Close()
 	}
 }
 

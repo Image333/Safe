@@ -165,50 +165,83 @@ extension on _TriggerScreenState {
     }
   }
 
-  Future<String?> _showKeywordDialog() async {
-    final controller = TextEditingController(text: _configuredKeyword ?? '');
-
-    final value = await showDialog<String>(
+  Future<String?> _showKeywordDialog() {
+    return showDialog<String>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Choisir un mot-clé vocal'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            textInputAction: TextInputAction.done,
-            decoration: const InputDecoration(
-              labelText: 'Mot-clé',
-              hintText: 'Ex: j\'ai oublié mes clés',
-            ),
-            onSubmitted: (_) {
-              final keyword = controller.text.trim();
-              if (keyword.isNotEmpty) {
-                Navigator.of(dialogContext).pop(keyword);
-              }
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Annuler'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final keyword = controller.text.trim();
-                if (keyword.isEmpty) return;
-                Navigator.of(dialogContext).pop(keyword);
-              },
-              child: const Text('Valider'),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _KeywordDialog(initialKeyword: _configuredKeyword ?? ''),
     );
+  }
+}
 
-    controller.dispose();
-    return value;
+/// Dialog propriétaire du TextEditingController : le dispose se fait dans
+/// [State.dispose] après démontage du TextField, ce qui évite l'assertion
+/// `_dependents.isEmpty` quand on annule avec le clavier ouvert (iOS).
+class _KeywordDialog extends StatefulWidget {
+  final String initialKeyword;
+
+  const _KeywordDialog({required this.initialKeyword});
+
+  @override
+  State<_KeywordDialog> createState() => _KeywordDialogState();
+}
+
+class _KeywordDialogState extends State<_KeywordDialog> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialKeyword);
+    _focusNode = FocusNode();
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _cancel() {
+    _focusNode.unfocus();
+    Navigator.of(context).pop();
+  }
+
+  void _submit() {
+    final keyword = _controller.text.trim();
+    if (keyword.isEmpty) return;
+    _focusNode.unfocus();
+    Navigator.of(context).pop(keyword);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('Choisir un mot-clé vocal'),
+      content: TextField(
+        controller: _controller,
+        focusNode: _focusNode,
+        autofocus: true,
+        textInputAction: TextInputAction.done,
+        decoration: const InputDecoration(
+          labelText: 'Mot-clé',
+          hintText: 'Ex: j\'ai oublié mes clés',
+        ),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _cancel,
+          child: const Text('Annuler'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          child: const Text('Valider'),
+        ),
+      ],
+    );
   }
 }
 

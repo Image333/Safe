@@ -6,6 +6,8 @@ import (
 	"log"
 	"strconv"
 
+	"gpe/telegram"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -28,12 +30,19 @@ type CreateAudioRequest struct {
 }
 
 // RegisterAudioRoutes enregistre tous les endpoints audio
-func RegisterAudioRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler) {
+// tg peut être nil : le clip n'est alors pas transmis aux contacts Telegram
+func RegisterAudioRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler, tg *telegram.Service) *Notifier {
+	var notifier *Notifier
+	if tg != nil {
+		notifier = NewNotifier(tg, audioNotifyWorkers, audioNotifyQueue, audioNotifyAttempts)
+	}
 
 	router.Get("/audio/:id", keyMiddleware, ProtectedRoute(), getAudioByID(db))
 	router.Get("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), getAudioByAlert(db))
 	router.Get("/me/audio", keyMiddleware, ProtectedRoute(), getMyAudio(db))
-	router.Post("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), createAudio(db))
+	router.Post("/alerts/:alertId/audio", keyMiddleware, ProtectedRoute(), createAudio(db, notifier))
+
+	return notifier
 }
 
 // GET /api/v1/audio/:id — Récupère un enregistrement audio par son ID
@@ -187,7 +196,7 @@ func getMyAudio(db *sql.DB) fiber.Handler {
 }
 
 // POST /api/v1/alerts/:alertId/audio — Ajoute un enregistrement audio à une alerte
-func createAudio(db *sql.DB) fiber.Handler {
+func createAudio(db *sql.DB, notifier *Notifier) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		alertID, err := strconv.Atoi(c.Params("alertId"))
 		if err != nil {
@@ -253,6 +262,18 @@ func createAudio(db *sql.DB) fiber.Handler {
 		}
 
 		newID, _ := result.LastInsertId()
+
+		// Transmettre le clip aux contacts Telegram liés (envoi en arrière-plan,
+		// les données sont lues en base avant la réponse)
+		if notifier != nil {
+			job, err := buildAudioJob(db, userID, alertID, req.BlobURL)
+			if err != nil {
+				log.Printf("Erreur préparation envoi audio Telegram alerte=%d: %v", alertID, err)
+			} else if len(job.recipients) > 0 && !notifier.enqueue(job) {
+				recordTelegramSend("audio", "dropped")
+				log.Printf("File d'envoi audio Telegram pleine, clip non transmis alerte=%d", alertID)
+			}
+		}
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"message":  "Enregistrement audio créé avec succès",

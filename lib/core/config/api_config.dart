@@ -64,7 +64,7 @@ class ApiConfig {
   static String get minioPublicBaseUrl =>
       'http://$minioHost:$minioPort/$minioBucket';
 
-  /// TODO: remplacer par l'ID renvoyé par POST /alerts quand la route existera.
+  /// Fallback si aucun alert_id n'est fourni (évite un crash ; préférer createAlert).
   static const int stubAlertId = int.fromEnvironment(
     'STUB_ALERT_ID',
     defaultValue: 1,

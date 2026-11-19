@@ -261,6 +261,15 @@ Or:
 * The authenticated user must be the owner of the alert.
 * Audio binary files are **not** sent through this endpoint — use MinIO directly for uploads.
 
+### Telegram forwarding
+
+After the insert, the clip is forwarded in the background to the user's trusted contacts linked to Telegram (`sendAudio`). The response does not wait for it.
+
+* The contacts and the user's name are read before the response; a bounded worker pool then downloads the clip **once** and sends it to each contact (3 attempts each).
+* The API only downloads `blob_url` values starting with one of the prefixes listed in `TELEGRAM_AUDIO_ALLOWED_URLS` (e.g. `http://minio-service:9000/audio-bucket/`). Any other URL is not fetched (SSRF protection); if the variable is empty, no clip is forwarded.
+* Redirects and loopback / link-local targets are refused, and clips are capped at 25 MB.
+* If MinIO cannot be reached from the API, the audio record is still created; only the Telegram forwarding fails (logged).
+
 ---
 
 ## Example Request

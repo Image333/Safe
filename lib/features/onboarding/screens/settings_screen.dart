@@ -6,7 +6,9 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/app_camouflage_service.dart';
 import '../../../core/services/app_reset_service.dart';
+import '../../../core/services/trusted_contacts_service.dart';
 import '../../../core/services/voice_trigger_service.dart';
+import 'contacts_screen.dart';
 import '../../../core/storage/camouflage_storage.dart';
 import '../../../core/theme/app_theme.dart';
 
@@ -20,6 +22,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _camouflageStorage = CamouflageStorage();
   final _camouflageService = AppCamouflageService();
   final _voiceTriggerService = VoiceTriggerService();
+  final _contactsService = TrustedContactsService();
   final _keywordController = TextEditingController();
   static const int _voiceDurationStepSec = 5;
 
@@ -32,6 +35,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _voiceRecordingDurationSec = VoiceTriggerService.defaultRecordingDurationSec;
   String _camouflageApp   = 'meteo';
   bool _isRefreshingVoice = false;
+  int _contactsCount = 0;
 
   // Configuration de la plage horaire
   bool _scheduleEnabled = false;
@@ -44,6 +48,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _loadCamouflageSettings();
     _loadVoiceTriggerSettings();
+    _loadContactsCount();
+  }
+
+  Future<void> _loadContactsCount() async {
+    final count = await _contactsService.count();
+    if (!mounted) return;
+    setState(() => _contactsCount = count);
   }
 
   @override
@@ -447,8 +458,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     iconBg: AppColors.orangeL,
                     iconColor: AppColors.orange,
                     title: 'Gérer les contacts',
-                    subtitle: '2 contacts configurés',
-                    onTap: () => Navigator.pushNamed(context, AppRouter.contacts),
+                    subtitle: _contactsCount == 0
+                        ? 'Aucun contact configuré'
+                        : '$_contactsCount contact${_contactsCount > 1 ? 's' : ''} configuré${_contactsCount > 1 ? 's' : ''}',
+                    onTap: () async {
+                      await Navigator.pushNamed(
+                        context,
+                        AppRouter.contacts,
+                        arguments: ContactsScreenMode.settings,
+                      );
+                      _loadContactsCount();
+                    },
                   ),
                 ]),
 

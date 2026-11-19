@@ -3,8 +3,14 @@ package routes
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"html"
 	"log"
 	"strconv"
+	"strings"
+	"time"
+
+	"gpe/telegram"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -17,9 +23,30 @@ var allowedAlertStatuses = map[string]bool{
 	"CANCELLED": true,
 }
 
+var parisLocation *time.Location
+
+func init() {
+	loc, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		parisLocation = time.FixedZone("CET", 3600)
+		return
+	}
+	parisLocation = loc
+}
+
 // CreateAlertRequest is the payload for creating an alert
 type CreateAlertRequest struct {
-	ConfigID int `json:"config_id"`
+	ConfigID  int      `json:"config_id"`
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
+	Trigger   string   `json:"trigger"`
+}
+
+// alertNotifyOpts carries optional context for the Telegram fan-out.
+type alertNotifyOpts struct {
+	Trigger   string
+	Latitude  *float64
+	Longitude *float64
 }
 
 // UpdateAlertRequest is the payload for updating an alert
@@ -36,56 +63,201 @@ type AlertResponse struct {
 	ConfigID  int    `json:"config_id"`
 }
 
+// NotifyResult is the Telegram delivery outcome for one trusted contact
+type NotifyResult struct {
+	ContactID   int    `json:"contact_id"`
+	ContactName string `json:"contact_name"`
+	Status      string `json:"status"` // queued | not_linked | error
+	Channel     string `json:"channel,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
 // RegisterAlertRoutes registers all alert endpoints
-func RegisterAlertRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler) {
-	router.Post("/alerts", keyMiddleware, ProtectedRoute(), createAlert(db))
+func RegisterAlertRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler, tg *telegram.Service) *Notifier {
+	var notifier *Notifier
+	if tg != nil {
+		notifier = NewNotifier(tg, alertNotifyWorkers, alertNotifyQueue, alertNotifyAttempts)
+	}
+
+	router.Post("/alerts", keyMiddleware, ProtectedRoute(), createAlert(db, notifier))
 	router.Get("/alerts", keyMiddleware, ProtectedRoute(), listAlerts(db))
 	router.Get("/alerts/:id", keyMiddleware, ProtectedRoute(), getAlert(db))
 	router.Put("/alerts/:id", keyMiddleware, ProtectedRoute(), updateAlert(db))
 	router.Delete("/alerts/:id", keyMiddleware, ProtectedRoute(), deleteAlert(db))
+
+	return notifier
 }
 
-// POST /api/v1/alerts — Creates an alert owned by the authenticated user
-func createAlert(db *sql.DB) fiber.Handler {
+// POST /api/v1/alerts — Creates an alert owned by the authenticated user,
+// then notifies the trusted contacts linked to Telegram
+func createAlert(db *sql.DB, notifier *Notifier) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := getCurrentUserID(c)
+		if userID == 0 {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Utilisateur non authentifié"})
+		}
 
 		var req CreateAlertRequest
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Format JSON invalide"})
 		}
 
-		if req.ConfigID <= 0 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "config_id requis"})
-		}
-
-		// The referenced configuration must exist (FK config_id NOT NULL)
-		var configID int
-		err := db.QueryRow(`SELECT config_id FROM configurations WHERE config_id = ?`, req.ConfigID).Scan(&configID)
+		// config_id is optional: falls back to the user's configuration (FK config_id NOT NULL)
+		configID, err := resolveConfigID(db, userID, req.ConfigID)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Configuration non trouvée"})
-			}
-			log.Printf("Erreur SQL vérification configuration: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Erreur serveur"})
+			log.Printf("resolveConfigID: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de résoudre la configuration"})
 		}
 
-		result, err := db.Exec(
-			`INSERT INTO alerts (user_id, config_id) VALUES (?, ?)`,
-			userID, req.ConfigID,
-		)
+		opts := alertNotifyOpts{Trigger: strings.TrimSpace(strings.ToLower(req.Trigger))}
+		if validCoords(req.Latitude, req.Longitude) {
+			opts.Latitude = req.Latitude
+			opts.Longitude = req.Longitude
+		}
+
+		// Alert and geolocation are inserted in the same transaction
+		alertID, err := insertAlertWithGeolocation(db, userID, configID, opts)
 		if err != nil {
 			log.Printf("Erreur SQL INSERT alerte: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de créer l'alerte"})
 		}
 
-		newID, _ := result.LastInsertId()
+		userName := loadUserDisplayName(db, userID)
+		job, notifications, err := buildAlertNotification(db, userID, userName, int(alertID), opts)
+		if err != nil {
+			log.Printf("buildAlertNotification: %v", err)
+			notifications = []NotifyResult{}
+		}
+		switch {
+		case len(job.recipients) == 0:
+			// Nothing linked: every contact is already reported as not_linked.
+		case notifier == nil:
+			notifications = markUndelivered(notifications, "telegram non configuré")
+		case !notifier.enqueue(job):
+			log.Printf("File d'envoi Telegram pleine, alerte=%d", alertID)
+			notifications = markUndelivered(notifications, "file d'envoi saturée")
+		}
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-			"message":  "Alerte créée avec succès",
-			"alert_id": newID,
+			"message":       "Alerte créée avec succès",
+			"alert_id":      alertID,
+			"notifications": notifications,
 		})
 	}
+}
+
+// insertAlertWithGeolocation creates the alert (default status PENDING) and,
+// when coordinates are provided, its geolocation row
+func insertAlertWithGeolocation(db *sql.DB, userID, configID int, opts alertNotifyOpts) (int64, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(
+		`INSERT INTO alerts (user_id, config_id) VALUES (?, ?)`,
+		userID, configID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	alertID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	if validCoords(opts.Latitude, opts.Longitude) {
+		if _, err := tx.Exec(
+			`INSERT INTO geolocations (latitude, longitude, alert_id) VALUES (?, ?, ?)`,
+			*opts.Latitude, *opts.Longitude, alertID,
+		); err != nil {
+			return 0, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return alertID, nil
+}
+
+func validCoords(lat, lng *float64) bool {
+	if lat == nil || lng == nil {
+		return false
+	}
+	return *lat >= -90 && *lat <= 90 && *lng >= -180 && *lng <= 180
+}
+
+func triggerLabel(trigger string) string {
+	switch strings.ToLower(strings.TrimSpace(trigger)) {
+	case "volume":
+		return "Volume"
+	case "voice":
+		return "Mot-clé vocal"
+	case "sos":
+		return "Bouton SOS"
+	default:
+		return "Alerte d'urgence"
+	}
+}
+
+// buildAlertTelegramMessage builds the HTML (parse_mode) alert text.
+// userName is user-controlled and must be escaped.
+func buildAlertTelegramMessage(userName string, opts alertNotifyOpts) string {
+	var b strings.Builder
+	b.WriteString("🚨 <b>URGENCE — SAFE</b>\n\n")
+	b.WriteString(fmt.Sprintf("%s a besoin d'aide maintenant.\n", html.EscapeString(userName)))
+	b.WriteString(fmt.Sprintf("📅 %s\n", time.Now().In(parisLocation).Format("02/01/2006 · 15:04")))
+	b.WriteString(fmt.Sprintf("⚡ Déclenchement : %s\n", triggerLabel(opts.Trigger)))
+	if validCoords(opts.Latitude, opts.Longitude) {
+		b.WriteString(fmt.Sprintf(
+			"\n📍 Ouvrir la position :\nhttps://maps.google.com/?q=%g,%g\n",
+			*opts.Latitude, *opts.Longitude,
+		))
+	}
+	b.WriteString("\n🎤 Un enregistrement audio suivra.")
+	return b.String()
+}
+
+func resolveConfigID(db *sql.DB, userID, requested int) (int, error) {
+	var userConfig sql.NullInt64
+	if err := db.QueryRow(`SELECT config_id FROM users WHERE user_id = ?`, userID).Scan(&userConfig); err != nil {
+		return 0, err
+	}
+
+	// Only the configuration attached to this user may be referenced: a config_id
+	// from another account is ignored instead of being trusted.
+	if requested > 0 && userConfig.Valid && int(userConfig.Int64) == requested {
+		return requested, nil
+	}
+	if userConfig.Valid && userConfig.Int64 > 0 {
+		return int(userConfig.Int64), nil
+	}
+
+	res, err := db.Exec(
+		`INSERT INTO configurations (alert_word, app_disguise) VALUES (?, ?)`,
+		"aide", "calculator",
+	)
+	if err != nil {
+		return 0, err
+	}
+	newID, _ := res.LastInsertId()
+	_, _ = db.Exec(`UPDATE users SET config_id = ? WHERE user_id = ?`, newID, userID)
+	return int(newID), nil
+}
+
+func loadUserDisplayName(db *sql.DB, userID int) string {
+	var firstname, name string
+	err := db.QueryRow(`SELECT firstname, name FROM users WHERE user_id = ?`, userID).Scan(&firstname, &name)
+	if err != nil {
+		return "Un utilisateur SAFE"
+	}
+	full := strings.TrimSpace(firstname + " " + name)
+	if full == "" {
+		return "Un utilisateur SAFE"
+	}
+	return full
 }
 
 // GET /api/v1/alerts — Lists the alerts of the authenticated user

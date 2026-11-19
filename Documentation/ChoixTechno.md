@@ -48,7 +48,18 @@ mon_app/
         └── SafetyService.kt     # Ton service natif Android
 
 
-# Envoie de SMS 
+# Notification des proches
 
-sms_flutter : https://pub.dev/packages/flutter_sms/example
+## Canal retenu : Telegram Bot API
+
+- Doc : https://core.telegram.org/bots/api
+- Envoi **côté serveur** (`sendMessage`) après opt-in (`/start` via deep-link)
+- Pas de lookup user par téléphone / email (limitation Bot API)
+- Architecture : [architecture_telegram_alerts.md](./architecture_telegram_alerts.md)
+
+## SMS (historique / alternative non retenue pour l’alerte silencieuse)
+
+`flutter_sms` ouvre le compose Messages (pas d’envoi silencieux) : https://pub.dev/packages/flutter_sms
+
+Branche exploratoire : `notif_alert_imessage`.
 
