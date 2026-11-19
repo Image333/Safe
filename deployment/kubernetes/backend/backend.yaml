@@ -21,6 +21,19 @@ spec:
         envFrom:
         - secretRef:
             name: gpe-secrets
+        # Telegram bot credentials (token + webhook secret). Created out of band:
+        #   kubectl create secret generic gpe-telegram -n gpe \
+        #     --from-literal=TELEGRAM_BOT_TOKEN=... \
+        #     --from-literal=TELEGRAM_WEBHOOK_SECRET=...
+        - secretRef:
+            name: gpe-telegram
+        env:
+        - name: TELEGRAM_BOT_USERNAME
+          value: "safemobileapp_bot"
+        # Allow-list for blob_url downloads: anything outside these prefixes is
+        # refused (SSRF guard). Empty disables audio delivery to contacts.
+        - name: TELEGRAM_AUDIO_ALLOWED_URLS
+          value: "http://minio-service:9000/audio-bucket/"
         readinessProbe:
           httpGet:
             path: /health
