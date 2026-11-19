@@ -1,7 +1,9 @@
 package routes
 
 import (
+	"crypto/subtle"
 	"database/sql"
+	"errors"
 	"log"
 	"os"
 	"strings"
@@ -19,7 +21,8 @@ type TelegramUpdate struct {
 		MessageID int    `json:"message_id"`
 		Text      string `json:"text"`
 		Chat      struct {
-			ID int64 `json:"id"`
+			ID   int64  `json:"id"`
+			Type string `json:"type"`
 		} `json:"chat"`
 		From *struct {
 			ID int64 `json:"id"`
@@ -45,7 +48,7 @@ func telegramWebhook(db *sql.DB, tg *telegram.Service) fiber.Handler {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "webhook secret non configuré"})
 		}
 		got := c.Get("X-Telegram-Bot-Api-Secret-Token")
-		if got != secret {
+		if subtle.ConstantTimeCompare([]byte(got), []byte(secret)) != 1 {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "secret invalide"})
 		}
 
@@ -59,6 +62,14 @@ func telegramWebhook(db *sql.DB, tg *telegram.Service) fiber.Handler {
 		}
 
 		chatID := update.Message.Chat.ID
+
+		// Only private chats: linking a group would broadcast every alert to all
+		// its members, which the contact never consented to.
+		if update.Message.Chat.Type != "private" {
+			log.Printf("telegram: non-private chat ignored (chat_id=%d type=%q)", chatID, update.Message.Chat.Type)
+			return c.SendStatus(fiber.StatusOK)
+		}
+
 		text := strings.TrimSpace(update.Message.Text)
 
 		// /start <token>
@@ -81,7 +92,7 @@ func telegramWebhook(db *sql.DB, tg *telegram.Service) fiber.Handler {
 					}
 					return c.SendStatus(fiber.StatusOK)
 				}
-				log.Printf("telegram: unknown or already-linked invite_token %q (chat_id=%d)", token, chatID)
+				log.Printf("telegram: invite token rejected (chat_id=%d)", chatID)
 			}
 			// No/invalid token → ask to share phone
 			if tg != nil {
@@ -139,43 +150,30 @@ func linkContactByInviteToken(db *sql.DB, token string, chatID int64) (bool, err
 }
 
 func linkContactByPhone(db *sql.DB, phone string, chatID int64) (bool, error) {
-	// Only unlinked contacts — avoids full-table scan of already-linked rows
-	// and prevents hijacking an existing telegram_chat_id.
-	rows, err := db.Query(
-		`SELECT contact_id, phone_number FROM contacts WHERE telegram_chat_id IS NULL`,
-	)
+	suffix := phoneSuffix(phone)
+	if suffix == "" {
+		return false, nil
+	}
+
+	// Indexed lookup on the normalized suffix. Only unlinked contacts are
+	// considered, so an existing telegram_chat_id cannot be hijacked.
+	var contactID int
+	err := db.QueryRow(
+		`SELECT contact_id FROM contacts
+		 WHERE telegram_chat_id IS NULL AND phone_suffix = ?
+		 LIMIT 1`, suffix,
+	).Scan(&contactID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
-	}
-	defer rows.Close()
-
-	var matchID int
-	found := false
-	for rows.Next() {
-		var (
-			id     int
-			stored string
-		)
-		if err := rows.Scan(&id, &stored); err != nil {
-			return false, err
-		}
-		if PhonesMatch(phone, stored) {
-			matchID = id
-			found = true
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	if !found {
-		return false, nil
 	}
 
 	res, err := db.Exec(
 		`UPDATE contacts SET telegram_chat_id = ?, telegram_linked_at = ?
 		 WHERE contact_id = ? AND telegram_chat_id IS NULL`,
-		chatID, time.Now().UTC(), matchID,
+		chatID, time.Now().UTC(), contactID,
 	)
 	if err != nil {
 		return false, err

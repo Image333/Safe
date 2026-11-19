@@ -138,9 +138,9 @@ func createContact(db *sql.DB, tg *telegram.Service) fiber.Handler {
 		defer tx.Rollback()
 
 		result, err := tx.Exec(
-			`INSERT INTO contacts (contact_name, phone_number, email, contact_type, priority_order, invite_token)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			req.ContactName, req.PhoneNumber, email, contactType, req.PriorityOrder, token,
+			`INSERT INTO contacts (contact_name, phone_number, phone_suffix, email, contact_type, priority_order, invite_token)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			req.ContactName, req.PhoneNumber, phoneSuffix(req.PhoneNumber), email, contactType, req.PriorityOrder, token,
 		)
 		if err != nil {
 			log.Printf("Erreur SQL INSERT contact: %v", err)
@@ -269,9 +269,9 @@ func updateContact(db *sql.DB, tg *telegram.Service) fiber.Handler {
 		}
 
 		if _, err := db.Exec(
-			`UPDATE contacts SET contact_name = ?, phone_number = ?, email = ?, contact_type = ?, priority_order = ?
+			`UPDATE contacts SET contact_name = ?, phone_number = ?, phone_suffix = ?, email = ?, contact_type = ?, priority_order = ?
 			 WHERE contact_id = ?`,
-			name, phone, emailVal, ctype, priority, id,
+			name, phone, phoneSuffix(phone), emailVal, ctype, priority, id,
 		); err != nil {
 			log.Printf("Erreur SQL UPDATE contact: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Impossible de mettre à jour le contact"})
@@ -446,19 +446,14 @@ func NormalizePhoneDigits(phone string) string {
 	return nonDigitRE.ReplaceAllString(phone, "")
 }
 
-// PhonesMatch compares normalized phones (exact or last 9 digits).
-func PhonesMatch(a, b string) bool {
-	da := NormalizePhoneDigits(a)
-	db := NormalizePhoneDigits(b)
-	if da == "" || db == "" {
-		return false
-	}
-	if da == db {
-		return true
-	}
+// phoneSuffix returns the digits used to match a shared phone number: the last
+// nine digits, or all of them when shorter. The same value is stored in
+// contacts.phone_suffix so matching becomes an indexed lookup.
+func phoneSuffix(phone string) string {
+	digits := NormalizePhoneDigits(phone)
 	const n = 9
-	if len(da) >= n && len(db) >= n {
-		return da[len(da)-n:] == db[len(db)-n:]
+	if len(digits) > n {
+		return digits[len(digits)-n:]
 	}
-	return false
+	return digits
 }

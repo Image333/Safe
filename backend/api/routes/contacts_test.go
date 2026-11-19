@@ -11,6 +11,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// setupContactTestEnv builds a Fiber app wired to a mock DB with all contact
+// routes registered, and a no-op auth middleware.
 func setupContactTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 	t.Helper()
 	app := fiber.New()
@@ -30,6 +32,12 @@ func setupContactTestEnv(t *testing.T) (*fiber.App, sqlmock.Sqlmock) {
 	return app, mock
 }
 
+// ============================================================================
+// POST /contacts
+// ============================================================================
+
+// TestCreateContact_Success: a valid contact is inserted inside a transaction,
+// linked to the authenticated user, and returned with its invite token.
 func TestCreateContact_Success(t *testing.T) {
 	app, mock := setupContactTestEnv(t)
 
@@ -39,7 +47,7 @@ func TestCreateContact_Success(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO contacts`).
-		WithArgs("Alice", "+33612345678", nil, "trusted", 1, sqlmock.AnyArg()).
+		WithArgs("Alice", "+33612345678", "612345678", nil, "trusted", 1, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(10, 1))
 	mock.ExpectExec(`INSERT INTO user_contacts`).
 		WithArgs(1, 10).
@@ -74,6 +82,8 @@ func TestCreateContact_Success(t *testing.T) {
 	}
 }
 
+// TestCreateContact_MissingFields: a body without phone_number is rejected with
+// 400 after the user existence check.
 func TestCreateContact_MissingFields(t *testing.T) {
 	app, mock := setupContactTestEnv(t)
 
@@ -96,6 +106,12 @@ func TestCreateContact_MissingFields(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// GET /contacts/:id
+// ============================================================================
+
+// TestGetContact_NotFound: an unknown contact id returns 404 rather than
+// exposing the SQL error.
 func TestGetContact_NotFound(t *testing.T) {
 	app, mock := setupContactTestEnv(t)
 
@@ -118,6 +134,8 @@ func TestGetContact_NotFound(t *testing.T) {
 	}
 }
 
+// TestGetContact_Forbidden: a contact owned by another user returns 403, so
+// ownership is reported explicitly instead of a misleading 404.
 func TestGetContact_Forbidden(t *testing.T) {
 	app, mock := setupContactTestEnv(t)
 
@@ -143,6 +161,12 @@ func TestGetContact_Forbidden(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// DELETE /contacts/:id
+// ============================================================================
+
+// TestDeleteContact_Forbidden: deleting a contact that belongs to another user
+// returns 403 and never reaches the DELETE statement.
 func TestDeleteContact_Forbidden(t *testing.T) {
 	app, mock := setupContactTestEnv(t)
 
@@ -168,15 +192,33 @@ func TestDeleteContact_Forbidden(t *testing.T) {
 	}
 }
 
-func TestPhonesMatch(t *testing.T) {
-	if !PhonesMatch("+33612345678", "0612345678") {
-		t.Error("expected last-9-digit match")
+// ============================================================================
+// Helpers
+// ============================================================================
+
+// TestPhoneSuffix: only the last nine digits are kept, so national and
+// international formats of the same number produce the same key.
+func TestPhoneSuffix(t *testing.T) {
+	if got := phoneSuffix("+33612345678"); got != "612345678" {
+		t.Errorf("suffixe attendu 612345678, obtenu %q", got)
 	}
-	if PhonesMatch("+33612345678", "+33799999999") {
-		t.Error("expected mismatch")
+	if got := phoneSuffix("0612345678"); got != "612345678" {
+		t.Errorf("suffixe attendu 612345678, obtenu %q", got)
+	}
+	if got := phoneSuffix("+33799999999"); got == "612345678" {
+		t.Errorf("deux numéros différents ne doivent pas partager le suffixe")
+	}
+	if got := phoneSuffix("  "); got != "" {
+		t.Errorf("suffixe vide attendu, obtenu %q", got)
 	}
 }
 
+// ============================================================================
+// POST /contacts/:id/invite/email
+// ============================================================================
+
+// TestInviteEmailStub_NotImplemented: the frozen email invitation endpoint
+// answers 501 until the SMTP phase ships.
 func TestInviteEmailStub_NotImplemented(t *testing.T) {
 	app, _ := setupContactTestEnv(t)
 
