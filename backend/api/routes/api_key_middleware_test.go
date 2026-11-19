@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// TestApiKeyMiddleware_Missing: a request without X-API-Key is rejected with 401.
 func TestApiKeyMiddleware_Missing(t *testing.T) {
 	app := fiber.New()
 	app.Use(ApiKeyMiddleware("app-key", "dev-key"))
@@ -25,6 +26,7 @@ func TestApiKeyMiddleware_Missing(t *testing.T) {
 	}
 }
 
+// TestApiKeyMiddleware_Invalid: a wrong X-API-Key is rejected with 403.
 func TestApiKeyMiddleware_Invalid(t *testing.T) {
 	app := fiber.New()
 	app.Use(ApiKeyMiddleware("app-key", "dev-key"))
@@ -43,6 +45,8 @@ func TestApiKeyMiddleware_Invalid(t *testing.T) {
 	}
 }
 
+// TestApiKeyMiddleware_ValidAppKey: the application key is accepted and the
+// handler runs.
 func TestApiKeyMiddleware_ValidAppKey(t *testing.T) {
 	app := fiber.New()
 	app.Use(ApiKeyMiddleware("app-key", "dev-key"))
