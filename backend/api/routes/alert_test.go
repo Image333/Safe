@@ -47,9 +47,7 @@ func expectAlertNotifyQueries(mock sqlmock.Sqlmock) {
 
 	mock.ExpectQuery(`SELECT c.contact_id, c.contact_name, c.telegram_chat_id`).
 		WithArgs(1).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"contact_id", "contact_name", "telegram_chat_id", "email", "invite_token",
-		}))
+		WillReturnRows(sqlmock.NewRows([]string{"contact_id", "contact_name", "telegram_chat_id"}))
 }
 
 // TestCreateAlert_Success: a valid config_id inserts an alert owned by the JWT
@@ -57,9 +55,9 @@ func expectAlertNotifyQueries(mock sqlmock.Sqlmock) {
 func TestCreateAlert_Success(t *testing.T) {
 	app, mock := setupAlertTestEnv(t)
 
-	// The referenced configuration must exist
-	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
-		WithArgs(2).
+	// The user's own configuration is loaded first
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
 		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
 
 	// user_id comes from the JWT (1), config_id from the body (2).
@@ -130,10 +128,6 @@ func TestCreateAlert_MissingConfigID(t *testing.T) {
 func TestCreateAlert_ConfigNotFound(t *testing.T) {
 	app, mock := setupAlertTestEnv(t)
 
-	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
-		WithArgs(99).
-		WillReturnRows(sqlmock.NewRows([]string{"config_id"})) // empty row set -> sql.ErrNoRows
-
 	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
 		WithArgs(1).
 		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(5))
@@ -169,8 +163,8 @@ func TestCreateAlert_WithGeolocation(t *testing.T) {
 
 	lat, lng := 48.8566, 2.3522
 
-	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
-		WithArgs(2).
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
 		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
 
 	mock.ExpectBegin()
@@ -214,8 +208,8 @@ func TestCreateAlert_GeolocationFailure(t *testing.T) {
 
 	lat, lng := 48.8566, 2.3522
 
-	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
-		WithArgs(2).
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
 		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
 
 	mock.ExpectBegin()
@@ -247,8 +241,8 @@ func TestCreateAlert_GeolocationFailure(t *testing.T) {
 func TestCreateAlert_WithoutGeolocation(t *testing.T) {
 	app, mock := setupAlertTestEnv(t)
 
-	mock.ExpectQuery(`SELECT config_id FROM configurations WHERE config_id = \?`).
-		WithArgs(2).
+	mock.ExpectQuery(`SELECT config_id FROM users WHERE user_id = \?`).
+		WithArgs(1).
 		WillReturnRows(sqlmock.NewRows([]string{"config_id"}).AddRow(2))
 
 	mock.ExpectBegin()

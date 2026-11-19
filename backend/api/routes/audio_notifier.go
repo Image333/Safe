@@ -5,22 +5,9 @@ import (
 	"fmt"
 	"html"
 	"log"
-	"time"
 
 	"gpe/telegram"
 )
-
-const (
-	audioNotifyWorkers  = 4
-	audioNotifyQueue    = 100
-	audioNotifyAttempts = 3
-)
-
-// audioSender est la partie du service Telegram utilisée pour l'envoi des clips
-type audioSender interface {
-	FetchAudio(audioURL string) (*telegram.AudioFile, error)
-	SendAudioFile(chatID int64, file *telegram.AudioFile, caption string) error
-}
 
 type audioRecipient struct {
 	contactID int
@@ -28,7 +15,7 @@ type audioRecipient struct {
 	chatID    int64
 }
 
-// audioJob contient tout ce qu'il faut pour l'envoi : le worker n'accède pas à la base
+// audioJob contains everything needed for delivery: the worker never touches the DB.
 type audioJob struct {
 	alertID    int
 	blobURL    string
@@ -36,81 +23,35 @@ type audioJob struct {
 	recipients []audioRecipient
 }
 
-// audioNotifier envoie les clips d'alerte aux contacts Telegram via un nombre fixe
-// de workers et une file bornée, avec retry
-type audioNotifier struct {
-	sender     audioSender
-	jobs       chan audioJob
-	retryDelay time.Duration
-}
-
-func newAudioNotifier(sender audioSender) *audioNotifier {
-	n := &audioNotifier{
-		sender:     sender,
-		jobs:       make(chan audioJob, audioNotifyQueue),
-		retryDelay: time.Second,
-	}
-	for i := 0; i < audioNotifyWorkers; i++ {
-		go n.run()
-	}
-	return n
-}
-
-// enqueue ajoute un envoi sans bloquer ; retourne false si la file est pleine
-func (n *audioNotifier) enqueue(job audioJob) bool {
-	select {
-	case n.jobs <- job:
-		return true
-	default:
-		return false
-	}
-}
-
-func (n *audioNotifier) run() {
-	for job := range n.jobs {
-		n.deliver(job)
-	}
-}
-
-// deliver télécharge le clip une seule fois puis l'envoie à chaque contact
-func (n *audioNotifier) deliver(job audioJob) {
+// deliver downloads the clip once (with retry) then sends it to every recipient.
+func (j audioJob) deliver(n *Notifier) {
 	var file *telegram.AudioFile
 	err := n.retry(func() error {
 		var err error
-		file, err = n.sender.FetchAudio(job.blobURL)
+		file, err = n.sender.FetchAudio(j.blobURL)
 		return err
 	})
 	if err != nil {
-		log.Printf("telegram FetchAudio alerte=%d: %v", job.alertID, err)
+		recordTelegramSend("audio", "error")
+		log.Printf("telegram FetchAudio alerte=%d: %v", j.alertID, err)
 		return
 	}
 
-	for _, r := range job.recipients {
+	for _, r := range j.recipients {
 		err := n.retry(func() error {
-			return n.sender.SendAudioFile(r.chatID, file, job.caption)
+			return n.sender.SendAudioFile(r.chatID, file, j.caption)
 		})
 		if err != nil {
-			log.Printf("telegram SendAudio contact=%d (%s) alerte=%d: %v", r.contactID, r.name, job.alertID, err)
+			recordTelegramSend("audio", "error")
+			log.Printf("telegram SendAudio contact=%d (%s) alerte=%d: %v", r.contactID, r.name, j.alertID, err)
 		} else {
-			log.Printf("telegram SendAudio OK contact=%d (%s) alerte=%d", r.contactID, r.name, job.alertID)
+			recordTelegramSend("audio", "ok")
+			log.Printf("telegram SendAudio OK contact=%d (%s) alerte=%d", r.contactID, r.name, j.alertID)
 		}
 	}
 }
 
-func (n *audioNotifier) retry(fn func() error) error {
-	var err error
-	for attempt := 1; attempt <= audioNotifyAttempts; attempt++ {
-		if err = fn(); err == nil {
-			return nil
-		}
-		if attempt < audioNotifyAttempts {
-			time.Sleep(n.retryDelay * time.Duration(attempt))
-		}
-	}
-	return err
-}
-
-// buildAudioJob charge le nom de l'utilisateur et ses contacts liés à Telegram
+// buildAudioJob loads the user display name and the Telegram-linked contacts.
 func buildAudioJob(db *sql.DB, userID, alertID int, blobURL string) (audioJob, error) {
 	job := audioJob{alertID: alertID, blobURL: blobURL}
 

@@ -67,23 +67,30 @@ type AlertResponse struct {
 type NotifyResult struct {
 	ContactID   int    `json:"contact_id"`
 	ContactName string `json:"contact_name"`
-	Status      string `json:"status"` // sent | not_linked | error
+	Status      string `json:"status"` // queued | not_linked | error
 	Channel     string `json:"channel,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
 // RegisterAlertRoutes registers all alert endpoints
-func RegisterAlertRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler, tg *telegram.Service) {
-	router.Post("/alerts", keyMiddleware, ProtectedRoute(), createAlert(db, tg))
+func RegisterAlertRoutes(router fiber.Router, db *sql.DB, keyMiddleware fiber.Handler, tg *telegram.Service) *Notifier {
+	var notifier *Notifier
+	if tg != nil {
+		notifier = NewNotifier(tg, alertNotifyWorkers, alertNotifyQueue, alertNotifyAttempts)
+	}
+
+	router.Post("/alerts", keyMiddleware, ProtectedRoute(), createAlert(db, notifier))
 	router.Get("/alerts", keyMiddleware, ProtectedRoute(), listAlerts(db))
 	router.Get("/alerts/:id", keyMiddleware, ProtectedRoute(), getAlert(db))
 	router.Put("/alerts/:id", keyMiddleware, ProtectedRoute(), updateAlert(db))
 	router.Delete("/alerts/:id", keyMiddleware, ProtectedRoute(), deleteAlert(db))
+
+	return notifier
 }
 
 // POST /api/v1/alerts — Creates an alert owned by the authenticated user,
 // then notifies the trusted contacts linked to Telegram
-func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
+func createAlert(db *sql.DB, notifier *Notifier) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := getCurrentUserID(c)
 		if userID == 0 {
@@ -116,7 +123,20 @@ func createAlert(db *sql.DB, tg *telegram.Service) fiber.Handler {
 		}
 
 		userName := loadUserDisplayName(db, userID)
-		notifications := notifyTrustedContacts(db, tg, userID, userName, int(alertID), opts)
+		job, notifications, err := buildAlertNotification(db, userID, userName, int(alertID), opts)
+		if err != nil {
+			log.Printf("buildAlertNotification: %v", err)
+			notifications = []NotifyResult{}
+		}
+		switch {
+		case len(job.recipients) == 0:
+			// Nothing linked: every contact is already reported as not_linked.
+		case notifier == nil:
+			notifications = markUndelivered(notifications, "telegram non configuré")
+		case !notifier.enqueue(job):
+			log.Printf("File d'envoi Telegram pleine, alerte=%d", alertID)
+			notifications = markUndelivered(notifications, "file d'envoi saturée")
+		}
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 			"message":       "Alerte créée avec succès",
@@ -201,21 +221,15 @@ func buildAlertTelegramMessage(userName string, opts alertNotifyOpts) string {
 }
 
 func resolveConfigID(db *sql.DB, userID, requested int) (int, error) {
-	if requested > 0 {
-		var id int
-		err := db.QueryRow(`SELECT config_id FROM configurations WHERE config_id = ?`, requested).Scan(&id)
-		if err == nil {
-			return id, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return 0, err
-		}
+	var userConfig sql.NullInt64
+	if err := db.QueryRow(`SELECT config_id FROM users WHERE user_id = ?`, userID).Scan(&userConfig); err != nil {
+		return 0, err
 	}
 
-	var userConfig sql.NullInt64
-	err := db.QueryRow(`SELECT config_id FROM users WHERE user_id = ?`, userID).Scan(&userConfig)
-	if err != nil {
-		return 0, err
+	// Only the configuration attached to this user may be referenced: a config_id
+	// from another account is ignored instead of being trusted.
+	if requested > 0 && userConfig.Valid && int(userConfig.Int64) == requested {
+		return requested, nil
 	}
 	if userConfig.Valid && userConfig.Int64 > 0 {
 		return int(userConfig.Int64), nil
@@ -244,66 +258,6 @@ func loadUserDisplayName(db *sql.DB, userID int) string {
 		return "Un utilisateur SAFE"
 	}
 	return full
-}
-
-func notifyTrustedContacts(db *sql.DB, tg *telegram.Service, userID int, userName string, alertID int, opts alertNotifyOpts) []NotifyResult {
-	rows, err := db.Query(`
-		SELECT c.contact_id, c.contact_name, c.telegram_chat_id, c.email, c.invite_token
-		FROM contacts c
-		INNER JOIN user_contacts uc ON uc.contact_id = c.contact_id
-		WHERE uc.user_id = ?`, userID)
-	if err != nil {
-		log.Printf("notifyTrustedContacts query: %v", err)
-		return []NotifyResult{}
-	}
-	defer rows.Close()
-
-	msg := buildAlertTelegramMessage(userName, opts)
-	hasPin := validCoords(opts.Latitude, opts.Longitude)
-
-	results := []NotifyResult{}
-	for rows.Next() {
-		var (
-			contactID int
-			name      string
-			chatID    sql.NullInt64
-			email     sql.NullString
-			token     sql.NullString
-		)
-		if err := rows.Scan(&contactID, &name, &chatID, &email, &token); err != nil {
-			log.Printf("notify scan: %v", err)
-			continue
-		}
-
-		r := NotifyResult{
-			ContactID:   contactID,
-			ContactName: name,
-		}
-
-		if chatID.Valid && tg != nil {
-			if err := tg.SendMessage(chatID.Int64, msg); err != nil {
-				r.Status = "error"
-				r.Channel = "telegram"
-				r.Error = err.Error()
-			} else {
-				r.Status = "sent"
-				r.Channel = "telegram"
-				if hasPin {
-					if err := tg.SendLocation(chatID.Int64, *opts.Latitude, *opts.Longitude); err != nil {
-						log.Printf("telegram sendLocation chat=%d: %v", chatID.Int64, err)
-					}
-				}
-			}
-		} else if chatID.Valid && tg == nil {
-			r.Status = "error"
-			r.Channel = "telegram"
-			r.Error = "telegram non configuré"
-		} else {
-			r.Status = "not_linked"
-		}
-		results = append(results, r)
-	}
-	return results
 }
 
 // GET /api/v1/alerts — Lists the alerts of the authenticated user

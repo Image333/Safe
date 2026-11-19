@@ -38,13 +38,16 @@ func (f *fakeAudioSender) SendAudioFile(chatID int64, _ *telegram.AudioFile, cap
 	return nil
 }
 
-// TestAudioNotifier_DeliverDownloadsOnce: the clip is fetched once (with retry)
-// and sent to every recipient.
-func TestAudioNotifier_DeliverDownloadsOnce(t *testing.T) {
-	sender := &fakeAudioSender{failFetch: 1}
-	n := &audioNotifier{sender: sender}
+func (f *fakeAudioSender) SendMessage(int64, string) error            { return nil }
+func (f *fakeAudioSender) SendLocation(int64, float64, float64) error { return nil }
 
-	n.deliver(audioJob{
+// TestAudioJob_DeliverDownloadsOnce: the clip is fetched once (with retry) and
+// sent to every recipient.
+func TestAudioJob_DeliverDownloadsOnce(t *testing.T) {
+	sender := &fakeAudioSender{failFetch: 1}
+	n := &Notifier{sender: sender, attempts: 3}
+
+	audioJob{
 		alertID: 3,
 		blobURL: "http://minio-service:9000/audio-bucket/clip.m4a",
 		caption: "caption",
@@ -52,7 +55,7 @@ func TestAudioNotifier_DeliverDownloadsOnce(t *testing.T) {
 			{contactID: 1, name: "A", chatID: 111},
 			{contactID: 2, name: "B", chatID: 222},
 		},
-	})
+	}.deliver(n)
 
 	if sender.fetches != 2 {
 		t.Errorf("Téléchargements attendus: 2 (1 échec + 1 retry), obtenus: %d", sender.fetches)
@@ -62,9 +65,9 @@ func TestAudioNotifier_DeliverDownloadsOnce(t *testing.T) {
 	}
 }
 
-// TestAudioNotifier_EnqueueBounded: enqueue never blocks once the queue is full.
-func TestAudioNotifier_EnqueueBounded(t *testing.T) {
-	n := &audioNotifier{jobs: make(chan audioJob, 1)}
+// TestNotifier_EnqueueBounded: enqueue never blocks once the queue is full.
+func TestNotifier_EnqueueBounded(t *testing.T) {
+	n := &Notifier{jobs: make(chan telegramJob, 1)}
 
 	if !n.enqueue(audioJob{alertID: 1}) {
 		t.Fatal("Le premier envoi doit être accepté")
@@ -128,5 +131,28 @@ func TestBuildAudioJob_NoLinkedContact(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("Attentes SQL non respectées: %s", err)
+	}
+}
+
+// TestNotifier_CloseDrains: Close delivers the already queued job and refuses
+// any new one.
+func TestNotifier_CloseDrains(t *testing.T) {
+	sender := &fakeAudioSender{}
+	n := NewNotifier(sender, 1, 4, 1)
+
+	if !n.enqueue(audioJob{
+		alertID:    1,
+		blobURL:    "http://minio-service:9000/audio-bucket/clip.m4a",
+		recipients: []audioRecipient{{contactID: 1, name: "A", chatID: 111}},
+	}) {
+		t.Fatal("enqueue attendu")
+	}
+	n.Close()
+
+	if n.enqueue(audioJob{alertID: 2}) {
+		t.Error("enqueue après Close doit être refusé")
+	}
+	if len(sender.sent) != 1 || sender.sent[0] != 111 {
+		t.Errorf("le job enfilé doit être délivré avant la fermeture: %v", sender.sent)
 	}
 }
