@@ -76,24 +76,24 @@
     },
     {
       "type": "stat",
-      "title": "Débit",
-      "description": "Requêtes HTTP par seconde sur la fenêtre sélectionnée.",
+      "title": "Requêtes (période)",
+      "description": "Nombre de requêtes HTTP sur la période sélectionnée.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(http_requests_total{instance=~\"$instance\", path=~\"$path\"}[$interval]))",
-          "legendFormat": "req/s",
-          "instant": false,
-          "range": true
+          "expr": "sum(increase(http_requests_total{instance=~\"$instance\", path=~\"$path\"}[$__range]))",
+          "legendFormat": "requêtes",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
-          "decimals": 2,
+          "unit": "short",
+          "decimals": 0,
           "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "mappings": []
@@ -240,67 +240,67 @@
       "panels": []
     },
     {
-      "type": "timeseries",
-      "title": "Débit par endpoint (top 10)",
-      "description": "Endpoints les plus sollicités, en requêtes/s.",
+      "type": "table",
+      "title": "Requêtes par endpoint",
+      "description": "Nombre de requêtes sur la période, tous codes confondus.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "topk(10, sum by (path) (rate(http_requests_total{instance=~\"$instance\", path=~\"$path\"}[$interval])))",
-          "legendFormat": "{{path}}",
-          "instant": false,
-          "range": true
+          "expr": "topk(10, sum by (path) (increase(http_requests_total{instance=~\"$instance\", path=~\"$path\"}[$__range])))",
+          "format": "time_series",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "transformations": [
+        { "id": "labelsToFields", "options": { "mode": "columns" } },
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": { "Value": "requêtes", "path": "endpoint" }
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
-          "decimals": 2,
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true,
-            "axisPlacement": "auto"
-          }
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "aucune requête",
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" } }
         },
         "overrides": []
       },
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      }
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "requêtes", "desc": true }] }
     },
     {
-      "type": "timeseries",
-      "title": "Débit par code HTTP",
-      "description": "Répartition du trafic par code de réponse.",
+      "type": "bargauge",
+      "title": "Requêtes par code HTTP",
+      "description": "Nombre de réponses par code sur la période.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum by (status_code) (rate(http_requests_total{instance=~\"$instance\", path=~\"$path\"}[$interval]))",
+          "expr": "sum by (status_code) (increase(http_requests_total{instance=~\"$instance\", path=~\"$path\"}[$__range]))",
           "legendFormat": "{{status_code}}",
-          "instant": false,
-          "range": true
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
-          "decimals": 2,
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 25,
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": { "mode": "normal", "group": "A" }
-          }
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "mappings": [],
+          "noValue": "aucune requête"
         },
         "overrides": [
           {
@@ -322,8 +322,11 @@
         ]
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "text"
       }
     },
     {
@@ -481,6 +484,7 @@
       },
       "transformations": [
         { "id": "labelsToFields", "options": { "mode": "columns" } },
+        { "id": "merge", "options": {} },
         {
           "id": "organize",
           "options": {
