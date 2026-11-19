@@ -85,7 +85,7 @@ class CreateAudioResponse {
 class AlertNotifyResult {
   final int contactId;
   final String contactName;
-  final String status; // sent | not_linked | error
+  final String status; // queued | not_linked | error
   final String? channel;
   final String? error;
 
@@ -137,8 +137,10 @@ class CreateAlertResponse {
     );
   }
 
-  int get sentCount =>
-      notifications.where((n) => n.status == 'sent').length;
+  /// Notifications accepted by the backend (Telegram delivery is asynchronous).
+  int get sentCount => notifications
+      .where((n) => n.status == 'sent' || n.status == 'queued')
+      .length;
 
   int get notLinkedCount =>
       notifications.where((n) => n.status == 'not_linked').length;

@@ -89,7 +89,7 @@ Authorization: Bearer <token>
     {
       "contact_id": 5,
       "contact_name": "Alice",
-      "status": "sent",
+      "status": "queued",
       "channel": "telegram"
     },
     {
@@ -107,15 +107,18 @@ Authorization: Bearer <token>
 | ------------- | ------- | --------------------------------------------- |
 | message       | string  | Success message                               |
 | alert_id      | integer | ID of the newly created alert                 |
-| notifications | array   | Telegram delivery result per trusted contact  |
+| notifications | array   | Delivery status per trusted contact (Telegram sends are asynchronous) |
 
 ### Notification status
 
-| status       | Meaning                                                     |
-| ------------ | ----------------------------------------------------------- |
-| `sent`       | Telegram `sendMessage` succeeded                            |
-| `not_linked` | Contact has no `telegram_chat_id` yet (bot not started)     |
-| `error`      | Delivery failed (bot not configured, Telegram API error, …) |
+| status       | Meaning                                                       |
+| ------------ | ------------------------------------------------------------- |
+| `queued`     | Accepted for background delivery to Telegram                  |
+| `not_linked` | Contact has no `telegram_chat_id` yet (bot not started)       |
+| `error`      | Delivery could not be scheduled (bot not configured, queue saturated) |
+
+Delivery failures after scheduling are logged by the backend; they are not
+reported synchronously in this response.
 
 ---
 
